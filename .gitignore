@@ -77,3 +77,7 @@ data/
 
 # report
 latex_template/
+
+# ai assistant
+AGENTS.md
+docs/
