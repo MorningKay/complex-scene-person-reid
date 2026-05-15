@@ -1,0 +1,79 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Outputs files (like pngs or jpgs)
+outputs
+
+# Word temp files
+~$*
+
+# LaTeX files
+*.acn
+*.acr
+*.alg
+*.aux
+*.bak
+*.bbl
+*.bcf
+*.blg
+*.brf
+*.bst
+*.dvi
+*.fdb_latexmk
+*.fls
+*.glg
+*.glo
+*.gls
+*.idx
+*.ilg
+*.ind
+*.ist
+*.lof
+*.log
+*.lol
+*.lot
+*.maf
+*.mtc
+*.mtc1
+*.nav
+*.nlo
+*.nls
+*.out
+*.pdf
+*.pyg
+*.run.xml
+*.snm
+*.synctex.gz
+*.tex.backup
+*.tex~
+*.thm
+*.toc
+*.vrb
+*.xdy
+*.xdv
+*.xml
+*blx.bib
+.bak 
+.mtc
+build/
+
+# datasets
+data/
+
+# model
+*.pth
+
+# exp doc
+*.doc
+~$*
+
+# report
+latex_template/
