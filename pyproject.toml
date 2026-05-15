@@ -42,3 +42,6 @@ explicit = true
 
 [tool.uv.workspace]
 members = []
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
