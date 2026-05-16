@@ -4,6 +4,7 @@ import pytest
 import torch
 
 from reid.engine import run_training
+from reid.utils import validate_training_config
 
 DATA_ROOT = Path("data/Market-1501-v15.09.15")
 
@@ -28,6 +29,7 @@ def make_smoke_config() -> dict:
             "num_classes": 751,
             "feature_dim": 2048,
             "last_stride": 1,
+            "pretrained": False,
         },
         "loss": {
             "label_smoothing": 0.0,
@@ -73,7 +75,28 @@ def test_run_training_writes_smoke_artifacts(tmp_path: Path) -> None:
     assert checkpoint["epoch"] == 1
     assert checkpoint["metrics"]["num_batches"] == 1
 
+    assert "model_pretrained=False" in (output_dir / "logs" / "train.txt").read_text(
+        encoding="utf-8"
+    )
+    assert "- model_pretrained: False" in (output_dir / "run_summary.md").read_text(
+        encoding="utf-8"
+    )
+
 
 def test_run_training_rejects_missing_required_config(tmp_path: Path) -> None:
     with pytest.raises(ValueError):
         run_training(config={"run": {"name": "bad"}}, output_dir=tmp_path, device="cpu")
+
+
+def test_validate_training_config_accepts_boolean_pretrained() -> None:
+    config = make_smoke_config()
+
+    validate_training_config(config)
+
+
+def test_validate_training_config_rejects_non_boolean_pretrained() -> None:
+    config = make_smoke_config()
+    config["model"]["pretrained"] = "true"
+
+    with pytest.raises(ValueError, match="model.pretrained"):
+        validate_training_config(config)

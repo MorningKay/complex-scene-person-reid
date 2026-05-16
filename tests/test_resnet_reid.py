@@ -1,6 +1,7 @@
 import torch
+from torchvision.models import resnet50 as torchvision_resnet50
 
-from reid.models import ResNetReID, resnet50_reid
+from reid.models import ResNetReID, load_resnet50_backbone_state_dict, resnet50_reid
 from reid.models.resnet_reid import Bottleneck
 
 
@@ -54,3 +55,40 @@ def test_bottleneck_downsample_matches_residual_shape() -> None:
     y = block(x)
 
     assert y.shape == (2, 256, 8, 4)
+
+
+def test_load_resnet50_backbone_state_dict_loads_matching_backbone_weights() -> None:
+    model = resnet50_reid(num_classes=10, feature_dim=256, last_stride=1)
+    source_model = torchvision_resnet50(weights=None)
+    source_state_dict = source_model.state_dict()
+
+    loaded_keys = load_resnet50_backbone_state_dict(model, source_state_dict)
+
+    assert "conv1.weight" in loaded_keys
+    assert "layer4.2.bn3.running_var" in loaded_keys
+    assert not any(key.startswith("fc.") for key in loaded_keys)
+    assert torch.equal(model.conv1.weight, source_state_dict["conv1.weight"])
+
+
+def test_load_resnet50_backbone_state_dict_keeps_reid_head_initialized() -> None:
+    model = resnet50_reid(num_classes=10, feature_dim=256, last_stride=1)
+    source_state_dict = torchvision_resnet50(weights=None).state_dict()
+    classifier_before = model.classifier.weight.detach().clone()
+    bnneck_before = model.bnneck.weight.detach().clone()
+    embedding_before = model.embedding.weight.detach().clone()
+
+    load_resnet50_backbone_state_dict(model, source_state_dict)
+
+    assert torch.equal(model.classifier.weight, classifier_before)
+    assert torch.equal(model.bnneck.weight, bnneck_before)
+    assert torch.equal(model.embedding.weight, embedding_before)
+
+
+def test_load_resnet50_backbone_state_dict_keeps_reid_last_stride() -> None:
+    model = resnet50_reid(num_classes=10, last_stride=1)
+    source_state_dict = torchvision_resnet50(weights=None).state_dict()
+
+    load_resnet50_backbone_state_dict(model, source_state_dict)
+
+    assert model.layer4[0].conv2.stride == (1, 1)
+    assert model.layer4[0].downsample[0].stride == (1, 1)
