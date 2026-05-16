@@ -21,6 +21,12 @@ optimizer:
   lr: 0.0003
   weight_decay: 0.0005
 train:
-  epochs: 60
+  epochs: 20
   max_batches:
   log_interval: 20
+eval:
+  enabled: true
+  interval: 1
+  batch_size: 128
+  num_workers: 4
+  distance: cosine

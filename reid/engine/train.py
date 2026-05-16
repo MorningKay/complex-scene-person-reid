@@ -13,6 +13,7 @@ from torch import nn
 from torch.optim import Optimizer
 
 from reid.data import build_market1501_dataloader
+from reid.engine.evaluate import evaluate_model_on_market1501
 from reid.losses import build_classification_loss
 from reid.models import resnet50_reid
 from reid.utils import set_seed, validate_training_config, write_config
@@ -132,13 +133,19 @@ def run_training(
         weight_decay=float(config["optimizer"]["weight_decay"]),
     )
 
-    history: list[dict[str, float | int]] = []
+    eval_config = config.get("eval", {})
+    eval_enabled = bool(eval_config.get("enabled", False))
+    history: list[dict[str, Any]] = []
     best_loss = float("inf")
+    best_map = -1.0
+    best_rank1 = 0.0
     best_epoch = 0
+    best_epoch_metrics: dict[str, Any] | None = None
+    best_metric_name = "mAP" if eval_enabled else "avg_train_loss"
     start_time = time.time()
 
     for epoch in range(1, int(config["train"]["epochs"]) + 1):
-        epoch_metrics = train_one_epoch(
+        train_metrics = train_one_epoch(
             model=model,
             dataloader=dataloader,
             criterion=criterion,
@@ -150,12 +157,36 @@ def run_training(
             log_interval=int(config["train"].get("log_interval", 20)),
             log_file=log_file,
         )
+        epoch_metrics: dict[str, Any] = dict(train_metrics)
         history.append(epoch_metrics)
         _log(
             "epoch={epoch} avg_train_loss={avg_train_loss:.6f} "
             "num_batches={num_batches} num_samples={num_samples}".format(**epoch_metrics),
             log_file,
         )
+
+        if _should_evaluate_epoch(eval_config, epoch):
+            eval_metrics = evaluate_model_on_market1501(
+                model=model,
+                data_root=config["data"]["root"],
+                image_size=tuple(config["data"].get("image_size", (256, 128))),
+                device=resolved_device,
+                batch_size=int(eval_config["batch_size"]),
+                num_workers=int(eval_config["num_workers"]),
+                distance=eval_config["distance"],
+                max_query=eval_config.get("max_query"),
+                max_gallery=eval_config.get("max_gallery"),
+                log_file=log_file,
+            )
+            epoch_metrics["eval"] = eval_metrics
+            _log(
+                "epoch={epoch} rank1={rank1:.6f} rank5={rank5:.6f} "
+                "rank10={rank10:.6f} mAP={mAP:.6f}".format(
+                    epoch=epoch,
+                    **eval_metrics,
+                ),
+                log_file,
+            )
 
         checkpoint = {
             "model": model.state_dict(),
@@ -167,9 +198,13 @@ def run_training(
         }
         latest_path = ckpt_dir / "latest.pth"
         torch.save(checkpoint, latest_path)
-        if float(epoch_metrics["avg_train_loss"]) < best_loss:
+        if _is_best_epoch(epoch_metrics, eval_enabled, best_loss, best_map, best_rank1):
             best_loss = float(epoch_metrics["avg_train_loss"])
+            if eval_enabled:
+                best_map = float(epoch_metrics["eval"]["mAP"])
+                best_rank1 = float(epoch_metrics["eval"]["rank1"])
             best_epoch = epoch
+            best_epoch_metrics = epoch_metrics
             shutil.copyfile(latest_path, ckpt_dir / "best.pth")
 
     elapsed_seconds = time.time() - start_time
@@ -182,7 +217,10 @@ def run_training(
         "num_batches": final_epoch_metrics["num_batches"],
         "num_samples": final_epoch_metrics["num_samples"],
         "best_epoch": best_epoch,
-        "best_avg_train_loss": best_loss,
+        "best_metric_name": best_metric_name,
+        "best_avg_train_loss": _best_metric_value(best_epoch_metrics, "avg_train_loss"),
+        "best_mAP": _best_eval_metric_value(best_epoch_metrics, "mAP"),
+        "best_rank1": _best_eval_metric_value(best_epoch_metrics, "rank1"),
         "elapsed_seconds": elapsed_seconds,
         "history": history,
     }
@@ -219,6 +257,42 @@ def _resolve_device(device: str | torch.device | None) -> torch.device:
     return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
+def _should_evaluate_epoch(eval_config: dict[str, Any], epoch: int) -> bool:
+    if not bool(eval_config.get("enabled", False)):
+        return False
+    return epoch % int(eval_config["interval"]) == 0
+
+
+def _is_best_epoch(
+    epoch_metrics: dict[str, Any],
+    eval_enabled: bool,
+    best_loss: float,
+    best_map: float,
+    best_rank1: float,
+) -> bool:
+    if not eval_enabled:
+        return float(epoch_metrics["avg_train_loss"]) < best_loss
+    eval_metrics = epoch_metrics.get("eval")
+    if not isinstance(eval_metrics, dict):
+        return False
+
+    current_map = float(eval_metrics["mAP"])
+    current_rank1 = float(eval_metrics["rank1"])
+    return (current_map > best_map) or (current_map == best_map and current_rank1 > best_rank1)
+
+
+def _best_metric_value(epoch_metrics: dict[str, Any] | None, name: str) -> float | None:
+    if epoch_metrics is None:
+        return None
+    return float(epoch_metrics[name])
+
+
+def _best_eval_metric_value(epoch_metrics: dict[str, Any] | None, name: str) -> float | None:
+    if epoch_metrics is None or "eval" not in epoch_metrics:
+        return None
+    return float(epoch_metrics["eval"][name])
+
+
 def _log(message: str, log_file: Path | None) -> None:
     print(message, flush=True)
     if log_file is not None:
@@ -242,8 +316,11 @@ def _write_run_summary(config: Config, metrics: dict[str, Any], output_path: Pat
             f"- model_pretrained: {bool(config['model'].get('pretrained', False))}",
             f"- epochs: {config['train']['epochs']}",
             f"- final_avg_train_loss: {metrics['avg_train_loss']:.6f}",
+            f"- best_metric_name: {metrics['best_metric_name']}",
             f"- best_epoch: {metrics['best_epoch']}",
-            f"- best_avg_train_loss: {metrics['best_avg_train_loss']:.6f}",
+            f"- best_avg_train_loss: {_format_optional_metric(metrics['best_avg_train_loss'])}",
+            f"- best_mAP: {_format_optional_metric(metrics['best_mAP'])}",
+            f"- best_rank1: {_format_optional_metric(metrics['best_rank1'])}",
             f"- latest_checkpoint: {output_path / 'ckpt' / 'latest.pth'}",
             f"- best_checkpoint: {output_path / 'ckpt' / 'best.pth'}",
             f"- smoke: {bool(config['run'].get('smoke', False))}",
@@ -251,3 +328,9 @@ def _write_run_summary(config: Config, metrics: dict[str, Any], output_path: Pat
         ]
     )
     (output_path / "run_summary.md").write_text(summary, encoding="utf-8")
+
+
+def _format_optional_metric(value: float | None) -> str:
+    if value is None:
+        return "null"
+    return f"{value:.6f}"

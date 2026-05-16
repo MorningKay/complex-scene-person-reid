@@ -24,3 +24,11 @@ train:
   epochs: 1
   max_batches: 2
   log_interval: 1
+eval:
+  enabled: true
+  interval: 1
+  batch_size: 4
+  num_workers: 0
+  distance: cosine
+  max_query: 8
+  max_gallery: 32

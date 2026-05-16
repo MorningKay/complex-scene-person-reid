@@ -66,6 +66,7 @@ def validate_training_config(config: Config) -> None:
     if "pretrained" in config["model"] and not isinstance(config["model"]["pretrained"], bool):
         raise ValueError("model.pretrained must be a boolean when provided")
     _ensure_positive_int(config["train"]["epochs"], "train.epochs")
+    _validate_eval_config(config)
 
     max_batches = config["train"].get("max_batches")
     if max_batches is not None:
@@ -94,3 +95,35 @@ def _ensure_positive_float(value: object, name: str) -> None:
 def _ensure_non_negative_float(value: object, name: str) -> None:
     if not isinstance(value, (int, float)) or value < 0:
         raise ValueError(f"{name} must be a non-negative number")
+
+
+def _validate_eval_config(config: Config) -> None:
+    if "eval" not in config:
+        return
+
+    eval_config = config["eval"]
+    if not isinstance(eval_config, dict):
+        raise ValueError("Config section must be a mapping: eval")
+    if "enabled" not in eval_config:
+        raise ValueError("Missing required config key: eval.enabled")
+    if not isinstance(eval_config["enabled"], bool):
+        raise ValueError("eval.enabled must be a boolean")
+    if not eval_config["enabled"]:
+        return
+
+    for key in ("interval", "batch_size", "num_workers", "distance"):
+        if key not in eval_config:
+            raise ValueError(f"Missing required config key: eval.{key}")
+
+    _ensure_positive_int(eval_config["interval"], "eval.interval")
+    _ensure_positive_int(eval_config["batch_size"], "eval.batch_size")
+    _ensure_non_negative_int(eval_config["num_workers"], "eval.num_workers")
+    if eval_config["interval"] > config["train"]["epochs"]:
+        raise ValueError("eval.interval must be less than or equal to train.epochs")
+    if eval_config["distance"] not in {"cosine", "euclidean"}:
+        raise ValueError("eval.distance must be one of: cosine, euclidean")
+
+    for key in ("max_query", "max_gallery"):
+        value = eval_config.get(key)
+        if value is not None:
+            _ensure_positive_int(value, f"eval.{key}")

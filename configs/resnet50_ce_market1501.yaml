@@ -24,3 +24,5 @@ train:
   epochs: 60
   max_batches:
   log_interval: 20
+eval:
+  enabled: false
