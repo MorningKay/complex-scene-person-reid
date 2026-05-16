@@ -96,6 +96,7 @@ def run_training(
 
     _log(f"run_name={config['run']['name']}", log_file)
     _log(f"device={resolved_device}", log_file)
+    _log(f"model_pretrained={bool(config['model'].get('pretrained', False))}", log_file)
 
     dataloader = build_market1501_dataloader(
         root=config["data"]["root"],
@@ -120,6 +121,7 @@ def run_training(
         num_classes=num_classes,
         feature_dim=int(config["model"]["feature_dim"]),
         last_stride=int(config["model"]["last_stride"]),
+        pretrained=bool(config["model"].get("pretrained", False)),
     ).to(resolved_device)
     criterion = build_classification_loss(
         label_smoothing=float(config["loss"]["label_smoothing"])
@@ -237,6 +239,7 @@ def _write_run_summary(config: Config, metrics: dict[str, Any], output_path: Pat
             "",
             f"- run_name: {config['run']['name']}",
             f"- device: {metrics['device']}",
+            f"- model_pretrained: {bool(config['model'].get('pretrained', False))}",
             f"- epochs: {config['train']['epochs']}",
             f"- final_avg_train_loss: {metrics['avg_train_loss']:.6f}",
             f"- best_epoch: {metrics['best_epoch']}",

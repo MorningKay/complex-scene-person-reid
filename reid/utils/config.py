@@ -63,6 +63,8 @@ def validate_training_config(config: Config) -> None:
     _ensure_positive_int(config["model"]["num_classes"], "model.num_classes")
     _ensure_positive_int(config["model"]["feature_dim"], "model.feature_dim")
     _ensure_positive_int(config["model"]["last_stride"], "model.last_stride")
+    if "pretrained" in config["model"] and not isinstance(config["model"]["pretrained"], bool):
+        raise ValueError("model.pretrained must be a boolean when provided")
     _ensure_positive_int(config["train"]["epochs"], "train.epochs")
 
     max_batches = config["train"].get("max_batches")

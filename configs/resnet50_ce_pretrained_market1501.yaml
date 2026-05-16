@@ -1,5 +1,5 @@
 run:
-  name: resnet50_ce_market1501
+  name: resnet50_ce_pretrained_market1501
   seed: 42
   smoke: false
 data:
@@ -14,7 +14,7 @@ model:
   num_classes: 751
   feature_dim: 2048
   last_stride: 1
-  pretrained: false
+  pretrained: true
 loss:
   label_smoothing: 0.0
 optimizer:

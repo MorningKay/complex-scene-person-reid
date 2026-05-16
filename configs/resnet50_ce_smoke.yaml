@@ -14,6 +14,7 @@ model:
   num_classes: 751
   feature_dim: 2048
   last_stride: 1
+  pretrained: false
 loss:
   label_smoothing: 0.0
 optimizer:
