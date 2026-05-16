@@ -1,0 +1,25 @@
+run:
+  name: resnet50_ce_market1501
+  seed: 42
+  smoke: false
+data:
+  root: data/Market-1501-v15.09.15
+  image_size: [256, 128]
+  batch_size: 16
+  num_workers: 4
+  random_erasing: false
+  pin_memory: true
+  drop_last: false
+model:
+  num_classes: 751
+  feature_dim: 2048
+  last_stride: 1
+loss:
+  label_smoothing: 0.0
+optimizer:
+  lr: 0.0003
+  weight_decay: 0.0005
+train:
+  epochs: 60
+  max_batches:
+  log_interval: 20
