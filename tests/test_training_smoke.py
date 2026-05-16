@@ -63,7 +63,7 @@ def test_run_training_writes_smoke_artifacts(tmp_path: Path) -> None:
 
     assert (output_dir / "config.yaml").is_file()
     assert (output_dir / "metrics.json").is_file()
-    assert (output_dir / "logs" / "train.log").is_file()
+    assert (output_dir / "logs" / "train.txt").is_file()
     assert (output_dir / "ckpt" / "latest.pth").is_file()
     assert (output_dir / "ckpt" / "best.pth").is_file()
     assert (output_dir / "run_summary.md").is_file()

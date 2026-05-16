@@ -86,7 +86,7 @@ def run_training(
     logs_dir.mkdir(parents=True, exist_ok=True)
     ckpt_dir.mkdir(parents=True, exist_ok=True)
 
-    log_file = logs_dir / "train.log"
+    log_file = logs_dir / "train.txt"
     if log_file.exists():
         log_file.unlink()
 
