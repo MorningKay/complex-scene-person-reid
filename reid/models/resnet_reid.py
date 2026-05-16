@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 import torch
 from torch import nn
 from torch.nn import functional as F
+from torchvision.models import ResNet50_Weights, resnet50 as torchvision_resnet50
 
 
 def conv1x1(in_channels: int, out_channels: int, stride: int = 1) -> nn.Conv2d:
@@ -206,9 +209,50 @@ def resnet50_reid(
     num_classes: int,
     feature_dim: int = 2048,
     last_stride: int = 1,
+    pretrained: bool = False,
 ) -> ResNetReID:
-    return ResNetReID(
+    model = ResNetReID(
         num_classes=num_classes,
         feature_dim=feature_dim,
         last_stride=last_stride,
     )
+    if pretrained:
+        load_imagenet_resnet50_weights(model)
+    return model
+
+
+def load_resnet50_backbone_state_dict(
+    model: ResNetReID,
+    source_state_dict: Mapping[str, torch.Tensor],
+) -> tuple[str, ...]:
+    target_state_dict = model.state_dict()
+    compatible_state_dict = {}
+    loaded_keys: list[str] = []
+
+    for name, tensor in source_state_dict.items():
+        if not name.startswith(_RESNET_BACKBONE_PREFIXES):
+            continue
+        if name not in target_state_dict:
+            continue
+        if target_state_dict[name].shape != tensor.shape:
+            continue
+        compatible_state_dict[name] = tensor.detach().clone()
+        loaded_keys.append(name)
+
+    model.load_state_dict(compatible_state_dict, strict=False)
+    return tuple(loaded_keys)
+
+
+def load_imagenet_resnet50_weights(model: ResNetReID) -> tuple[str, ...]:
+    source_model = torchvision_resnet50(weights=ResNet50_Weights.IMAGENET1K_V2)
+    return load_resnet50_backbone_state_dict(model, source_model.state_dict())
+
+
+_RESNET_BACKBONE_PREFIXES = (
+    "conv1.",
+    "bn1.",
+    "layer1.",
+    "layer2.",
+    "layer3.",
+    "layer4.",
+)
