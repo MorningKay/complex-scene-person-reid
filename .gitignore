@@ -9,8 +9,8 @@ wheels/
 # Virtual environments
 .venv
 
-# Outputs files (like pngs or jpgs)
-outputs
+# Experiment outputs
+/outputs/
 
 # Word temp files
 ~$*
