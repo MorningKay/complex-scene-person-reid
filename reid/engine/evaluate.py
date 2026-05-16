@@ -100,13 +100,6 @@ def run_evaluation(
     max_query: int | None = None,
     max_gallery: int | None = None,
 ) -> dict[str, Any]:
-    if distance not in {"cosine", "euclidean"}:
-        raise ValueError("distance must be one of: cosine, euclidean")
-    if batch_size <= 0:
-        raise ValueError("batch_size must be positive")
-    if num_workers < 0:
-        raise ValueError("num_workers must be non-negative")
-
     output_path = Path(output_dir)
     logs_dir = output_path / "logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
@@ -121,6 +114,50 @@ def run_evaluation(
     _log(f"checkpoint={checkpoint_path}", log_file)
     _log(f"device={resolved_device}", log_file)
     _log(f"distance={distance}", log_file)
+
+    metrics = evaluate_model_on_market1501(
+        model=model,
+        data_root=data_root,
+        image_size=image_size,
+        device=resolved_device,
+        batch_size=batch_size,
+        num_workers=num_workers,
+        distance=distance,
+        max_query=max_query,
+        max_gallery=max_gallery,
+        log_file=log_file,
+    )
+    metrics = {"checkpoint": str(checkpoint_path), **metrics}
+    _write_json(metrics, output_path / "eval_metrics.json")
+    _log(
+        "rank1={rank1:.6f} rank5={rank5:.6f} rank10={rank10:.6f} "
+        "mAP={mAP:.6f} valid_queries={num_valid_queries}".format(**metrics),
+        log_file,
+    )
+    return metrics
+
+
+def evaluate_model_on_market1501(
+    model: nn.Module,
+    data_root: str | Path,
+    image_size: tuple[int, int] = (256, 128),
+    device: str | torch.device | None = None,
+    batch_size: int = 64,
+    num_workers: int = 0,
+    distance: DistanceName = "cosine",
+    max_query: int | None = None,
+    max_gallery: int | None = None,
+    log_file: Path | None = None,
+) -> dict[str, Any]:
+    if distance not in {"cosine", "euclidean"}:
+        raise ValueError("distance must be one of: cosine, euclidean")
+    if batch_size <= 0:
+        raise ValueError("batch_size must be positive")
+    if num_workers < 0:
+        raise ValueError("num_workers must be non-negative")
+
+    resolved_device = _resolve_device(device)
+    model.to(resolved_device)
 
     query_loader = build_market1501_dataloader(
         root=data_root,
@@ -159,8 +196,7 @@ def run_evaluation(
         gallery_camids=gallery.camids,
         max_rank=10,
     )
-    metrics = {
-        "checkpoint": str(checkpoint_path),
+    return {
         "distance": distance,
         "rank1": _rank_at(retrieval_metrics.cmc, 1),
         "rank5": _rank_at(retrieval_metrics.cmc, 5),
@@ -171,13 +207,6 @@ def run_evaluation(
         "num_gallery": int(gallery.features.shape[0]),
         "elapsed_seconds": time.time() - start_time,
     }
-    _write_json(metrics, output_path / "eval_metrics.json")
-    _log(
-        "rank1={rank1:.6f} rank5={rank5:.6f} rank10={rank10:.6f} "
-        "mAP={mAP:.6f} valid_queries={num_valid_queries}".format(**metrics),
-        log_file,
-    )
-    return metrics
 
 
 def _limit_eval_samples(
@@ -240,10 +269,11 @@ def _rank_at(cmc: torch.Tensor, rank: int) -> float:
     return float(cmc[index])
 
 
-def _log(message: str, log_file: Path) -> None:
+def _log(message: str, log_file: Path | None) -> None:
     print(message, flush=True)
-    with log_file.open("a", encoding="utf-8") as file:
-        file.write(message + "\n")
+    if log_file is not None:
+        with log_file.open("a", encoding="utf-8") as file:
+            file.write(message + "\n")
 
 
 def _write_json(data: dict[str, Any], path: Path) -> None:
