@@ -18,7 +18,12 @@ from reid.data import build_reid_dataloader, normalize_dataset_name
 from reid.engine.evaluate import DEFAULT_QUERY_CHUNK_SIZE, evaluate_model_on_reid_dataset
 from reid.losses import build_classification_loss
 from reid.models import resnet50_reid
-from reid.utils import set_seed, validate_training_config, write_config
+from reid.utils import (
+    configure_torch_multiprocessing_sharing,
+    set_seed,
+    validate_training_config,
+    write_config,
+)
 
 Config = dict[str, Any]
 _TRAINING_EVAL_DATASETS = {"market1501", "msmt17_v1"}
@@ -116,6 +121,7 @@ def run_training(
     device: str | torch.device | None = None,
     resume_checkpoint: str | Path | None = None,
 ) -> dict[str, Any]:
+    sharing_strategy = configure_torch_multiprocessing_sharing()
     validate_training_config(config)
     output_path = Path(output_dir)
     logs_dir = output_path / "logs"
@@ -137,6 +143,7 @@ def run_training(
 
     _log(f"run_name={config['run']['name']}", log_file)
     _log(f"device={resolved_device}", log_file)
+    _log(f"torch_sharing_strategy={sharing_strategy}", log_file)
     dataset_name = _dataset_name(config)
     amp_enabled = _amp_enabled(config, resolved_device)
     grad_clip_norm = _grad_clip_norm(config)

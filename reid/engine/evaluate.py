@@ -15,6 +15,7 @@ from reid.data import build_reid_dataloader, normalize_dataset_name
 from reid.data.common import ReIDSample
 from reid.evaluation import evaluate_market_style_retrieval
 from reid.models import resnet50_reid
+from reid.utils import configure_torch_multiprocessing_sharing
 
 Config = dict[str, Any]
 DistanceName = Literal["cosine", "euclidean"]
@@ -104,6 +105,7 @@ def run_evaluation(
     max_gallery: int | None = None,
     query_chunk_size: int = DEFAULT_QUERY_CHUNK_SIZE,
 ) -> dict[str, Any]:
+    sharing_strategy = configure_torch_multiprocessing_sharing()
     output_path = Path(output_dir)
     logs_dir = output_path / "logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
@@ -118,6 +120,7 @@ def run_evaluation(
 
     _log(f"checkpoint={checkpoint_path}", log_file)
     _log(f"device={resolved_device}", log_file)
+    _log(f"torch_sharing_strategy={sharing_strategy}", log_file)
     _log(f"dataset_name={normalized_dataset_name}", log_file)
     _log(f"distance={distance}", log_file)
     _log(f"query_chunk_size={query_chunk_size}", log_file)
@@ -160,6 +163,7 @@ def evaluate_model_on_reid_dataset(
     query_chunk_size: int = DEFAULT_QUERY_CHUNK_SIZE,
     log_file: Path | None = None,
 ) -> dict[str, Any]:
+    configure_torch_multiprocessing_sharing()
     normalized_dataset_name = normalize_dataset_name(dataset_name)
     if normalized_dataset_name not in _MARKET_STYLE_EVAL_DATASETS:
         valid = ", ".join(sorted(_MARKET_STYLE_EVAL_DATASETS))
