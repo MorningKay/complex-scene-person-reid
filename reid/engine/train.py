@@ -6,6 +6,7 @@ import json
 import math
 import shutil
 import time
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -113,6 +114,7 @@ def run_training(
     config: Config,
     output_dir: str | Path,
     device: str | torch.device | None = None,
+    resume_checkpoint: str | Path | None = None,
 ) -> dict[str, Any]:
     validate_training_config(config)
     output_path = Path(output_dir)
@@ -122,8 +124,12 @@ def run_training(
     ckpt_dir.mkdir(parents=True, exist_ok=True)
 
     log_file = logs_dir / "train.txt"
-    if log_file.exists():
+    if log_file.exists() and resume_checkpoint is None:
         log_file.unlink()
+
+    resume_state = _load_resume_checkpoint(resume_checkpoint) if resume_checkpoint else None
+    if resume_state is not None:
+        _assert_resume_config_compatible(config, resume_state)
 
     write_config(config, output_path / "config.yaml")
     set_seed(int(config["run"]["seed"]))
@@ -139,6 +145,8 @@ def run_training(
     _log(f"scheduler_name={_scheduler_name(config)}", log_file)
     _log(f"amp_enabled={amp_enabled}", log_file)
     _log(f"grad_clip_norm={_format_optional_metric(grad_clip_norm)}", log_file)
+    if resume_checkpoint is not None:
+        _log(f"resume_checkpoint={resume_checkpoint}", log_file)
 
     dataloader = build_reid_dataloader(
         name=dataset_name,
@@ -177,18 +185,38 @@ def run_training(
     )
     scaler = torch.amp.GradScaler("cuda", enabled=amp_enabled)
 
+    start_epoch = 1
+    if resume_state is not None:
+        _load_training_state(
+            resume_state=resume_state,
+            model=model,
+            optimizer=optimizer,
+            scaler=scaler,
+            device=resolved_device,
+            pid_to_label=pid_to_label,
+        )
+        start_epoch = int(resume_state["epoch"]) + 1
+        if start_epoch > int(config["train"]["epochs"]):
+            raise ValueError(
+                "Resume checkpoint has already reached or exceeded train.epochs, "
+                f"got checkpoint epoch {resume_state['epoch']} and train.epochs "
+                f"{config['train']['epochs']}"
+            )
+
     eval_config = config.get("eval", {})
     eval_enabled = bool(eval_config.get("enabled", False))
-    history: list[dict[str, Any]] = []
-    best_loss = float("inf")
-    best_map = -1.0
-    best_rank1 = 0.0
-    best_epoch = 0
-    best_epoch_metrics: dict[str, Any] | None = None
+    history = _resume_history(output_path, resume_state)
+    best_epoch_metrics, best_epoch = _best_from_history(history, eval_enabled)
+    best_loss_value = _best_metric_value(best_epoch_metrics, "avg_train_loss")
+    best_map_value = _best_eval_metric_value(best_epoch_metrics, "mAP")
+    best_rank1_value = _best_eval_metric_value(best_epoch_metrics, "rank1")
+    best_loss = best_loss_value if best_loss_value is not None else float("inf")
+    best_map = best_map_value if best_map_value is not None else -1.0
+    best_rank1 = best_rank1_value if best_rank1_value is not None else 0.0
     best_metric_name = "mAP" if eval_enabled else "avg_train_loss"
     start_time = time.time()
 
-    for epoch in range(1, int(config["train"]["epochs"]) + 1):
+    for epoch in range(start_epoch, int(config["train"]["epochs"]) + 1):
         _set_epoch_lr(optimizer, config, epoch)
         train_metrics = train_one_epoch(
             model=model,
@@ -256,6 +284,7 @@ def run_training(
             "scaler": scaler.state_dict(),
             "epoch": epoch,
             "metrics": epoch_metrics,
+            "history": history,
             "config": config,
             "pid_to_label": pid_to_label,
         }
@@ -323,6 +352,108 @@ def _build_pid_to_label(dataloader: torch.utils.data.DataLoader) -> dict[int, in
 
     pids = sorted({int(sample.pid) for sample in samples if int(sample.pid) >= 0})
     return {pid: label for label, pid in enumerate(pids)}
+
+
+def _load_resume_checkpoint(path: str | Path | None) -> dict[str, Any] | None:
+    if path is None:
+        return None
+    checkpoint = torch.load(path, map_location="cpu")
+    if not isinstance(checkpoint, dict):
+        raise ValueError("Resume checkpoint must be a mapping")
+    for key in ("model", "optimizer", "epoch", "config", "pid_to_label"):
+        if key not in checkpoint:
+            raise ValueError(f"Resume checkpoint is missing required key: {key}")
+    return checkpoint
+
+
+def _assert_resume_config_compatible(config: Config, checkpoint: dict[str, Any]) -> None:
+    checkpoint_config = checkpoint["config"]
+    if not isinstance(checkpoint_config, dict):
+        raise ValueError("Resume checkpoint config must be a mapping")
+
+    current = deepcopy(config)
+    previous = deepcopy(checkpoint_config)
+    current_epochs = int(current["train"].pop("epochs"))
+    previous_epochs = int(previous["train"].pop("epochs"))
+    if current_epochs < previous_epochs:
+        raise ValueError("Current train.epochs must be greater than or equal to checkpoint config")
+    if current != previous:
+        raise ValueError("Current config must match checkpoint config when resuming")
+
+
+def _load_training_state(
+    resume_state: dict[str, Any],
+    model: nn.Module,
+    optimizer: Optimizer,
+    scaler: torch.amp.GradScaler,
+    device: torch.device,
+    pid_to_label: dict[int, int],
+) -> None:
+    checkpoint_pid_to_label = resume_state["pid_to_label"]
+    if checkpoint_pid_to_label != pid_to_label:
+        raise ValueError("Resume checkpoint pid_to_label does not match the current dataset")
+
+    model.load_state_dict(resume_state["model"])
+    optimizer.load_state_dict(resume_state["optimizer"])
+    _move_optimizer_state(optimizer, device)
+    scaler_state = resume_state.get("scaler")
+    if isinstance(scaler_state, dict):
+        scaler.load_state_dict(scaler_state)
+
+
+def _move_optimizer_state(optimizer: Optimizer, device: torch.device) -> None:
+    for state in optimizer.state.values():
+        for key, value in state.items():
+            if torch.is_tensor(value):
+                state[key] = value.to(device)
+
+
+def _resume_history(
+    output_path: Path,
+    resume_state: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    if resume_state is None:
+        return []
+
+    metrics_path = output_path / "metrics.json"
+    if metrics_path.is_file():
+        with metrics_path.open("r", encoding="utf-8") as file:
+            metrics = json.load(file)
+        history = metrics.get("history", [])
+        if isinstance(history, list):
+            return list(history)
+
+    history = resume_state.get("history")
+    if isinstance(history, list):
+        return list(history)
+
+    metrics = resume_state.get("metrics")
+    if isinstance(metrics, dict):
+        return [metrics]
+
+    return []
+
+
+def _best_from_history(
+    history: list[dict[str, Any]],
+    eval_enabled: bool,
+) -> tuple[dict[str, Any] | None, int]:
+    best_epoch_metrics: dict[str, Any] | None = None
+    best_loss = float("inf")
+    best_map = -1.0
+    best_rank1 = 0.0
+    best_epoch = 0
+
+    for epoch_metrics in history:
+        if _is_best_epoch(epoch_metrics, eval_enabled, best_loss, best_map, best_rank1):
+            best_epoch_metrics = epoch_metrics
+            best_loss = float(epoch_metrics["avg_train_loss"])
+            if eval_enabled:
+                best_map = float(epoch_metrics["eval"]["mAP"])
+                best_rank1 = float(epoch_metrics["eval"]["rank1"])
+            best_epoch = int(epoch_metrics["epoch"])
+
+    return best_epoch_metrics, best_epoch
 
 
 def _resolve_device(device: str | torch.device | None) -> torch.device:
