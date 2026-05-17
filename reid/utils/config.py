@@ -61,6 +61,13 @@ def validate_training_config(config: Config) -> None:
     data_name = config["data"].get("name")
     if data_name is not None and not isinstance(data_name, str):
         raise ValueError("data.name must be a string when provided")
+    if "random_erasing" in config["data"] and not isinstance(
+        config["data"]["random_erasing"], bool
+    ):
+        raise ValueError("data.random_erasing must be a boolean when provided")
+    random_erasing_prob = config["data"].get("random_erasing_prob")
+    if random_erasing_prob is not None:
+        _ensure_probability(random_erasing_prob, "data.random_erasing_prob")
     _ensure_positive_int(config["data"]["batch_size"], "data.batch_size")
     _ensure_non_negative_int(config["data"]["num_workers"], "data.num_workers")
     _ensure_positive_int(config["model"]["num_classes"], "model.num_classes")
@@ -104,6 +111,13 @@ def _ensure_positive_float(value: object, name: str) -> None:
 def _ensure_non_negative_float(value: object, name: str) -> None:
     if not isinstance(value, (int, float)) or value < 0:
         raise ValueError(f"{name} must be a non-negative number")
+
+
+def _ensure_probability(value: object, name: str) -> None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{name} must be a number in the range (0, 1]")
+    if value <= 0 or value > 1:
+        raise ValueError(f"{name} must be in the range (0, 1]")
 
 
 def _validate_eval_config(config: Config) -> None:

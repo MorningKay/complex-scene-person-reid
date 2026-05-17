@@ -63,13 +63,18 @@ def build_reid_dataloader(
     batch_size: int,
     image_size: ImageSize = (256, 128),
     random_erasing: bool = False,
+    random_erasing_prob: float = 0.5,
     shuffle: bool | None = None,
     num_workers: int = 0,
     pin_memory: bool = False,
     drop_last: bool = False,
 ) -> DataLoader:
     transform = (
-        build_train_transform(image_size=image_size, random_erasing=random_erasing)
+        build_train_transform(
+            image_size=image_size,
+            random_erasing=random_erasing,
+            erase_prob=random_erasing_prob,
+        )
         if split == "train"
         else build_eval_transform(image_size=image_size)
     )
@@ -116,6 +121,7 @@ def build_market1501_dataloader(
     batch_size: int,
     image_size: ImageSize = (256, 128),
     random_erasing: bool = False,
+    random_erasing_prob: float = 0.5,
     shuffle: bool | None = None,
     num_workers: int = 0,
     pin_memory: bool = False,
@@ -128,6 +134,7 @@ def build_market1501_dataloader(
         batch_size=batch_size,
         image_size=image_size,
         random_erasing=random_erasing,
+        random_erasing_prob=random_erasing_prob,
         shuffle=shuffle,
         num_workers=num_workers,
         pin_memory=pin_memory,

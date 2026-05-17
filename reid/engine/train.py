@@ -147,8 +147,12 @@ def run_training(
     dataset_name = _dataset_name(config)
     amp_enabled = _amp_enabled(config, resolved_device)
     grad_clip_norm = _grad_clip_norm(config)
+    random_erasing = bool(config["data"].get("random_erasing", False))
+    random_erasing_prob = _random_erasing_prob(config)
     _log(f"dataset_name={dataset_name}", log_file)
     _log(f"model_pretrained={bool(config['model'].get('pretrained', False))}", log_file)
+    _log(f"random_erasing={random_erasing}", log_file)
+    _log(f"random_erasing_prob={random_erasing_prob:.6f}", log_file)
     _log(f"scheduler_name={_scheduler_name(config)}", log_file)
     _log(f"amp_enabled={amp_enabled}", log_file)
     _log(f"grad_clip_norm={_format_optional_metric(grad_clip_norm)}", log_file)
@@ -161,7 +165,8 @@ def run_training(
         split="train",
         batch_size=int(config["data"]["batch_size"]),
         image_size=tuple(config["data"].get("image_size", (256, 128))),
-        random_erasing=bool(config["data"].get("random_erasing", False)),
+        random_erasing=random_erasing,
+        random_erasing_prob=random_erasing_prob,
         shuffle=True,
         num_workers=int(config["data"]["num_workers"]),
         pin_memory=bool(config["data"].get("pin_memory", False)),
@@ -317,6 +322,8 @@ def run_training(
         "avg_ce_loss": final_epoch_metrics["avg_ce_loss"],
         "train_id_acc": final_epoch_metrics["train_id_acc"],
         "lr": final_epoch_metrics["lr"],
+        "random_erasing": random_erasing,
+        "random_erasing_prob": random_erasing_prob,
         "scheduler_name": _scheduler_name(config),
         "scheduler_state": _scheduler_state(
             config, optimizer, int(final_epoch_metrics["epoch"])
@@ -480,6 +487,10 @@ def _grad_clip_norm(config: Config) -> float | None:
     return float(value)
 
 
+def _random_erasing_prob(config: Config) -> float:
+    return float(config["data"].get("random_erasing_prob", 0.5))
+
+
 def _dataset_name(config: Config) -> str:
     return normalize_dataset_name(config.get("data", {}).get("name"))
 
@@ -599,6 +610,8 @@ def _write_run_summary(config: Config, metrics: dict[str, Any], output_path: Pat
             f"- dataset_name: {metrics['dataset_name']}",
             f"- device: {metrics['device']}",
             f"- model_pretrained: {bool(config['model'].get('pretrained', False))}",
+            f"- random_erasing: {metrics['random_erasing']}",
+            f"- random_erasing_prob: {metrics['random_erasing_prob']:.6f}",
             f"- scheduler_name: {metrics['scheduler_name']}",
             f"- amp_enabled: {metrics['amp_enabled']}",
             f"- grad_clip_norm: {_format_optional_metric(metrics['grad_clip_norm'])}",
