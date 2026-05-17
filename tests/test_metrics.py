@@ -1,7 +1,12 @@
 import pytest
 import torch
 
-from reid.evaluation.metrics import RetrievalMetrics, evaluate_market1501
+from reid.evaluation.distance import pairwise_distance
+from reid.evaluation.metrics import (
+    RetrievalMetrics,
+    evaluate_market1501,
+    evaluate_market_style_retrieval,
+)
 
 
 def test_evaluate_market1501_returns_perfect_scores_for_perfect_ranking() -> None:
@@ -100,4 +105,70 @@ def test_evaluate_market1501_validates_input_shapes() -> None:
             gallery_pids=[1, 2],
             query_camids=[0],
             gallery_camids=[0, 1],
+        )
+
+
+def test_evaluate_market_style_retrieval_matches_full_matrix() -> None:
+    query_features = torch.tensor([[0.0, 0.0], [10.0, 10.0]])
+    gallery_features = torch.tensor(
+        [
+            [0.1, 0.0],
+            [10.1, 10.0],
+            [99.0, 99.0],
+            [0.2, 0.0],
+        ]
+    )
+    query_pids = [1, 2]
+    gallery_pids = [1, 2, -1, 1]
+    query_camids = [0, 1]
+    gallery_camids = [1, 0, 0, 0]
+
+    full_metrics = evaluate_market1501(
+        pairwise_distance(query_features, gallery_features),
+        query_pids=query_pids,
+        gallery_pids=gallery_pids,
+        query_camids=query_camids,
+        gallery_camids=gallery_camids,
+        max_rank=4,
+    )
+    chunked_metrics = evaluate_market_style_retrieval(
+        query_features=query_features,
+        gallery_features=gallery_features,
+        query_pids=query_pids,
+        gallery_pids=gallery_pids,
+        query_camids=query_camids,
+        gallery_camids=gallery_camids,
+        distance="euclidean",
+        max_rank=4,
+        query_chunk_size=1,
+    )
+
+    torch.testing.assert_close(chunked_metrics.cmc, full_metrics.cmc)
+    assert chunked_metrics.mAP == pytest.approx(full_metrics.mAP)
+    assert chunked_metrics.num_valid_queries == full_metrics.num_valid_queries
+
+
+def test_evaluate_market_style_retrieval_raises_without_valid_query() -> None:
+    with pytest.raises(ValueError, match="No valid Market-style query"):
+        evaluate_market_style_retrieval(
+            query_features=torch.tensor([[0.0, 0.0]]),
+            gallery_features=torch.tensor([[0.1, 0.0]]),
+            query_pids=[1],
+            gallery_pids=[1],
+            query_camids=[0],
+            gallery_camids=[0],
+            query_chunk_size=1,
+        )
+
+
+def test_evaluate_market_style_retrieval_rejects_invalid_chunk_size() -> None:
+    with pytest.raises(ValueError, match="query_chunk_size"):
+        evaluate_market_style_retrieval(
+            query_features=torch.tensor([[0.0, 0.0]]),
+            gallery_features=torch.tensor([[0.1, 0.0]]),
+            query_pids=[1],
+            gallery_pids=[1],
+            query_camids=[0],
+            gallery_camids=[1],
+            query_chunk_size=0,
         )

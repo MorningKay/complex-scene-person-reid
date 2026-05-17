@@ -7,6 +7,7 @@ from reid.engine import run_evaluation
 from reid.engine.train import run_training
 
 DATA_ROOT = Path("data/Market-1501-v15.09.15")
+MSMT17_ROOT = Path("data/MSMT17_V1")
 
 
 def make_smoke_config() -> dict:
@@ -66,11 +67,49 @@ def test_run_evaluation_writes_metrics_and_log(tmp_path: Path) -> None:
 
     assert (eval_dir / "eval_metrics.json").is_file()
     assert (eval_dir / "logs" / "eval.txt").is_file()
+    assert metrics["dataset_name"] == "market1501"
+    assert metrics["query_chunk_size"] == 256
     assert metrics["num_query"] == 8
     assert metrics["num_gallery"] == 32
     assert metrics["num_valid_queries"] > 0
     for key in ("rank1", "rank5", "rank10", "mAP"):
         assert 0 <= metrics[key] <= 1
+
+
+def test_run_evaluation_accepts_msmt17_dataset_name(tmp_path: Path) -> None:
+    if not DATA_ROOT.is_dir():
+        pytest.skip(f"Market-1501 dataset not found at {DATA_ROOT}")
+    if not MSMT17_ROOT.is_dir():
+        pytest.skip(f"MSMT17_V1 dataset not found at {MSMT17_ROOT}")
+
+    train_dir = tmp_path / "train"
+    eval_dir = tmp_path / "eval_msmt17"
+    run_training(config=make_smoke_config(), output_dir=train_dir, device="cpu")
+
+    metrics = run_evaluation(
+        checkpoint_path=train_dir / "ckpt" / "best.pth",
+        dataset_name="msmt17_v1",
+        data_root=MSMT17_ROOT,
+        output_dir=eval_dir,
+        device="cpu",
+        batch_size=4,
+        num_workers=0,
+        max_query=8,
+        max_gallery=64,
+        query_chunk_size=2,
+    )
+
+    assert metrics["dataset_name"] == "msmt17_v1"
+    assert metrics["query_chunk_size"] == 2
+    assert metrics["num_query"] == 8
+    assert metrics["num_gallery"] == 64
+    assert metrics["num_valid_queries"] > 0
+    for key in ("rank1", "rank5", "rank10", "mAP"):
+        assert 0 <= metrics[key] <= 1
+
+    eval_log = (eval_dir / "logs" / "eval.txt").read_text(encoding="utf-8")
+    assert "dataset_name=msmt17_v1" in eval_log
+    assert "query_chunk_size=2" in eval_log
 
 
 @pytest.mark.parametrize(
