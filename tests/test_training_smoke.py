@@ -5,7 +5,7 @@ import pytest
 import torch
 
 from reid.engine import run_training
-from reid.utils import validate_training_config
+from reid.utils import load_config, validate_training_config
 
 DATA_ROOT = Path("data/Market-1501-v15.09.15")
 MSMT17_ROOT = Path("data/MSMT17_V1")
@@ -80,6 +80,8 @@ def test_run_training_writes_smoke_artifacts(tmp_path: Path) -> None:
     assert metrics["lr"] == pytest.approx(0.0003)
     assert metrics["scheduler_name"] == "constant"
     assert metrics["scheduler_state"]["name"] == "constant"
+    assert metrics["random_erasing"] is False
+    assert metrics["random_erasing_prob"] == pytest.approx(0.5)
     assert metrics["amp_enabled"] is False
     assert metrics["grad_clip_norm"] is None
 
@@ -119,12 +121,16 @@ def test_run_training_writes_smoke_artifacts(tmp_path: Path) -> None:
     assert "train_id_acc" in metrics["history"][0]
     assert "lr" in metrics["history"][0]
     assert metrics["scheduler_name"] == "constant"
+    assert metrics["random_erasing"] is False
+    assert metrics["random_erasing_prob"] == pytest.approx(0.5)
     assert metrics["amp_enabled"] is False
     assert metrics["grad_clip_norm"] is None
 
     train_log = (output_dir / "logs" / "train.txt").read_text(encoding="utf-8")
     assert "dataset_name=market1501" in train_log
     assert "model_pretrained=False" in train_log
+    assert "random_erasing=False" in train_log
+    assert "random_erasing_prob=0.500000" in train_log
     assert "scheduler_name=constant" in train_log
     assert "amp_enabled=False" in train_log
     assert "grad_clip_norm=null" in train_log
@@ -137,6 +143,8 @@ def test_run_training_writes_smoke_artifacts(tmp_path: Path) -> None:
     run_summary = (output_dir / "run_summary.md").read_text(encoding="utf-8")
     assert "- dataset_name: market1501" in run_summary
     assert "- model_pretrained: False" in run_summary
+    assert "- random_erasing: False" in run_summary
+    assert "- random_erasing_prob: 0.500000" in run_summary
     assert "- scheduler_name: constant" in run_summary
     assert "- amp_enabled: False" in run_summary
     assert "- grad_clip_norm: null" in run_summary
@@ -282,6 +290,34 @@ def test_run_training_records_amp_fallback_and_grad_clip(tmp_path: Path) -> None
     assert "grad_clip_norm=1.000000" in train_log
 
 
+def test_run_training_records_random_erasing_controls(tmp_path: Path) -> None:
+    if not DATA_ROOT.is_dir():
+        pytest.skip(f"Market-1501 dataset not found at {DATA_ROOT}")
+
+    config = make_smoke_config()
+    config["eval"] = {"enabled": False}
+    config["data"]["random_erasing"] = True
+    config["data"]["random_erasing_prob"] = 0.5
+    output_dir = tmp_path / "random_erasing"
+
+    metrics = run_training(config=config, output_dir=output_dir, device="cpu")
+
+    assert metrics["random_erasing"] is True
+    assert metrics["random_erasing_prob"] == pytest.approx(0.5)
+
+    metrics_json = json.loads((output_dir / "metrics.json").read_text(encoding="utf-8"))
+    assert metrics_json["random_erasing"] is True
+    assert metrics_json["random_erasing_prob"] == pytest.approx(0.5)
+
+    train_log = (output_dir / "logs" / "train.txt").read_text(encoding="utf-8")
+    assert "random_erasing=True" in train_log
+    assert "random_erasing_prob=0.500000" in train_log
+
+    run_summary = (output_dir / "run_summary.md").read_text(encoding="utf-8")
+    assert "- random_erasing: True" in run_summary
+    assert "- random_erasing_prob: 0.500000" in run_summary
+
+
 def test_run_training_resumes_from_checkpoint(tmp_path: Path) -> None:
     if not DATA_ROOT.is_dir():
         pytest.skip(f"Market-1501 dataset not found at {DATA_ROOT}")
@@ -379,6 +415,42 @@ def test_validate_training_config_rejects_invalid_train_controls(
 
     with pytest.raises(ValueError, match=message):
         validate_training_config(config)
+
+
+@pytest.mark.parametrize(
+    ("key", "value", "message"),
+    [
+        ("random_erasing", "true", "data.random_erasing"),
+        ("random_erasing_prob", 0, "data.random_erasing_prob"),
+        ("random_erasing_prob", -0.1, "data.random_erasing_prob"),
+        ("random_erasing_prob", 1.1, "data.random_erasing_prob"),
+        ("random_erasing_prob", "0.5", "data.random_erasing_prob"),
+        ("random_erasing_prob", True, "data.random_erasing_prob"),
+    ],
+)
+def test_validate_training_config_rejects_invalid_random_erasing_controls(
+    key: str,
+    value: object,
+    message: str,
+) -> None:
+    config = make_smoke_config()
+    config["data"][key] = value
+
+    with pytest.raises(ValueError, match=message):
+        validate_training_config(config)
+
+
+def test_msmt17_random_erasing_config_matches_ms1_recipe() -> None:
+    config = load_config("configs/resnet50_ce_pretrained_msmt17_random_erasing.yaml")
+
+    assert config["run"]["name"] == "resnet50_ce_pretrained_msmt17_random_erasing"
+    assert config["data"]["name"] == "msmt17_v1"
+    assert config["data"]["random_erasing"] is True
+    assert config["data"]["random_erasing_prob"] == pytest.approx(0.5)
+    assert config["model"]["pretrained"] is True
+    assert config["loss"]["label_smoothing"] == pytest.approx(0.0)
+    assert config["eval"]["enabled"] is True
+    assert config["eval"]["query_chunk_size"] == 256
 
 
 @pytest.mark.parametrize(

@@ -8,6 +8,7 @@ from torchvision import transforms
 from reid.data import (
     build_eval_transform,
     build_market1501_dataloader,
+    build_reid_dataloader,
     build_train_transform,
     market1501_collate,
 )
@@ -91,3 +92,40 @@ def test_build_market1501_dataloader_returns_tensor_batch() -> None:
     assert camids.dtype == torch.long
     assert len(paths) == 4
     assert all(isinstance(path, str) for path in paths)
+
+
+def test_train_dataloader_passes_random_erasing_probability() -> None:
+    if not DATA_ROOT.is_dir():
+        pytest.skip(f"Market-1501 dataset not found at {DATA_ROOT}")
+
+    dataloader = build_reid_dataloader(
+        name="market1501",
+        root=DATA_ROOT,
+        split="train",
+        batch_size=2,
+        random_erasing=True,
+        random_erasing_prob=0.25,
+        num_workers=0,
+    )
+
+    transform = dataloader.dataset.transform
+    assert isinstance(transform.transforms[-1], transforms.RandomErasing)
+    assert transform.transforms[-1].p == 0.25
+
+
+def test_eval_dataloader_ignores_random_erasing_controls() -> None:
+    if not DATA_ROOT.is_dir():
+        pytest.skip(f"Market-1501 dataset not found at {DATA_ROOT}")
+
+    dataloader = build_reid_dataloader(
+        name="market1501",
+        root=DATA_ROOT,
+        split="query",
+        batch_size=2,
+        random_erasing=True,
+        random_erasing_prob=0.25,
+        num_workers=0,
+    )
+    transform_types = tuple(type(step) for step in dataloader.dataset.transform.transforms)
+
+    assert transforms.RandomErasing not in transform_types
