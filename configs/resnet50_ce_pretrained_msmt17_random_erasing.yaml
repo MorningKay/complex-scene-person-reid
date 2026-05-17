@@ -1,0 +1,42 @@
+run:
+  name: resnet50_ce_pretrained_msmt17_random_erasing
+  seed: 42
+  smoke: false
+data:
+  name: msmt17_v1
+  root: data/MSMT17_V1
+  image_size: [256, 128]
+  batch_size: 16
+  num_workers: 4
+  random_erasing: true
+  random_erasing_prob: 0.5
+  pin_memory: true
+  drop_last: false
+model:
+  num_classes: 1041
+  feature_dim: 2048
+  last_stride: 1
+  pretrained: true
+loss:
+  label_smoothing: 0.0
+optimizer:
+  lr: 0.0003
+  weight_decay: 0.0005
+scheduler:
+  name: cosine
+  min_lr: 0.000001
+  warmup_epochs: 2
+  warmup_factor: 0.1
+train:
+  epochs: 20
+  max_batches:
+  log_interval: 20
+  amp: true
+  grad_clip_norm:
+eval:
+  enabled: true
+  interval: 1
+  batch_size: 128
+  num_workers: 4
+  distance: cosine
+  query_chunk_size: 256
