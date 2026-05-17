@@ -1,4 +1,4 @@
-"""Evaluate a Re-ID checkpoint on Market-1501."""
+"""Evaluate a Re-ID checkpoint on a query/gallery dataset."""
 
 from __future__ import annotations
 
@@ -16,8 +16,13 @@ from reid.engine import run_evaluation
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Evaluate a Person Re-ID checkpoint.")
     parser.add_argument("--checkpoint", required=True, help="Path to a checkpoint .pth file.")
-    parser.add_argument("--data-root", required=True, help="Market-1501 root directory.")
+    parser.add_argument("--data-root", required=True, help="Dataset root directory.")
     parser.add_argument("--output-dir", required=True, help="Evaluation output directory.")
+    parser.add_argument(
+        "--dataset-name",
+        default="market1501",
+        help="Dataset name, e.g. market1501 or msmt17_v1.",
+    )
     parser.add_argument("--device", default=None, help="Override device, e.g. cpu or cuda.")
     parser.add_argument("--batch-size", type=int, default=64, help="Evaluation batch size.")
     parser.add_argument("--num-workers", type=int, default=0, help="DataLoader worker count.")
@@ -39,6 +44,12 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Optional smoke-test limit for gallery images.",
     )
+    parser.add_argument(
+        "--query-chunk-size",
+        type=int,
+        default=256,
+        help="Number of query features evaluated per distance chunk.",
+    )
     return parser.parse_args()
 
 
@@ -48,12 +59,14 @@ def main() -> None:
         checkpoint_path=args.checkpoint,
         data_root=args.data_root,
         output_dir=args.output_dir,
+        dataset_name=args.dataset_name,
         device=args.device,
         batch_size=args.batch_size,
         num_workers=args.num_workers,
         distance=args.distance,
         max_query=args.max_query,
         max_gallery=args.max_gallery,
+        query_chunk_size=args.query_chunk_size,
     )
     print(f"eval_metrics_json={Path(args.output_dir) / 'eval_metrics.json'}", flush=True)
     print(f"rank1={metrics['rank1']:.6f}", flush=True)

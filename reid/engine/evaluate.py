@@ -1,4 +1,4 @@
-"""Checkpoint evaluation engine for Market-1501 retrieval."""
+"""Checkpoint evaluation engine for Re-ID retrieval."""
 
 from __future__ import annotations
 
@@ -11,13 +11,15 @@ from typing import Any, Literal
 import torch
 from torch import nn
 
-from reid.data import build_market1501_dataloader
-from reid.data.market1501 import Market1501Sample
-from reid.evaluation import cosine_distance, evaluate_market1501, pairwise_distance
+from reid.data import build_reid_dataloader, normalize_dataset_name
+from reid.data.common import ReIDSample
+from reid.evaluation import evaluate_market_style_retrieval
 from reid.models import resnet50_reid
 
 Config = dict[str, Any]
 DistanceName = Literal["cosine", "euclidean"]
+DEFAULT_QUERY_CHUNK_SIZE = 256
+_MARKET_STYLE_EVAL_DATASETS = {"market1501", "msmt17_v1"}
 
 
 @dataclass(frozen=True)
@@ -93,12 +95,14 @@ def run_evaluation(
     checkpoint_path: str | Path,
     data_root: str | Path,
     output_dir: str | Path,
+    dataset_name: str = "market1501",
     device: str | torch.device | None = None,
     batch_size: int = 64,
     num_workers: int = 0,
     distance: DistanceName = "cosine",
     max_query: int | None = None,
     max_gallery: int | None = None,
+    query_chunk_size: int = DEFAULT_QUERY_CHUNK_SIZE,
 ) -> dict[str, Any]:
     output_path = Path(output_dir)
     logs_dir = output_path / "logs"
@@ -110,13 +114,17 @@ def run_evaluation(
     resolved_device = _resolve_device(device)
     model, _checkpoint, config = load_model_from_checkpoint(checkpoint_path, resolved_device)
     image_size = tuple(config.get("data", {}).get("image_size", (256, 128)))
+    normalized_dataset_name = normalize_dataset_name(dataset_name)
 
     _log(f"checkpoint={checkpoint_path}", log_file)
     _log(f"device={resolved_device}", log_file)
+    _log(f"dataset_name={normalized_dataset_name}", log_file)
     _log(f"distance={distance}", log_file)
+    _log(f"query_chunk_size={query_chunk_size}", log_file)
 
-    metrics = evaluate_model_on_market1501(
+    metrics = evaluate_model_on_reid_dataset(
         model=model,
+        dataset_name=normalized_dataset_name,
         data_root=data_root,
         image_size=image_size,
         device=resolved_device,
@@ -125,6 +133,7 @@ def run_evaluation(
         distance=distance,
         max_query=max_query,
         max_gallery=max_gallery,
+        query_chunk_size=query_chunk_size,
         log_file=log_file,
     )
     metrics = {"checkpoint": str(checkpoint_path), **metrics}
@@ -137,8 +146,9 @@ def run_evaluation(
     return metrics
 
 
-def evaluate_model_on_market1501(
+def evaluate_model_on_reid_dataset(
     model: nn.Module,
+    dataset_name: str,
     data_root: str | Path,
     image_size: tuple[int, int] = (256, 128),
     device: str | torch.device | None = None,
@@ -147,19 +157,30 @@ def evaluate_model_on_market1501(
     distance: DistanceName = "cosine",
     max_query: int | None = None,
     max_gallery: int | None = None,
+    query_chunk_size: int = DEFAULT_QUERY_CHUNK_SIZE,
     log_file: Path | None = None,
 ) -> dict[str, Any]:
+    normalized_dataset_name = normalize_dataset_name(dataset_name)
+    if normalized_dataset_name not in _MARKET_STYLE_EVAL_DATASETS:
+        valid = ", ".join(sorted(_MARKET_STYLE_EVAL_DATASETS))
+        raise ValueError(
+            f"Evaluation currently supports only Market-style datasets: {valid}; "
+            f"got {dataset_name!r}"
+        )
     if distance not in {"cosine", "euclidean"}:
         raise ValueError("distance must be one of: cosine, euclidean")
     if batch_size <= 0:
         raise ValueError("batch_size must be positive")
     if num_workers < 0:
         raise ValueError("num_workers must be non-negative")
+    if query_chunk_size <= 0:
+        raise ValueError("query_chunk_size must be positive")
 
     resolved_device = _resolve_device(device)
     model.to(resolved_device)
 
-    query_loader = build_market1501_dataloader(
+    query_loader = build_reid_dataloader(
+        name=normalized_dataset_name,
         root=data_root,
         split="query",
         batch_size=batch_size,
@@ -167,7 +188,8 @@ def evaluate_model_on_market1501(
         shuffle=False,
         num_workers=num_workers,
     )
-    gallery_loader = build_market1501_dataloader(
+    gallery_loader = build_reid_dataloader(
+        name=normalized_dataset_name,
         root=data_root,
         split="gallery",
         batch_size=batch_size,
@@ -180,24 +202,27 @@ def evaluate_model_on_market1501(
     start_time = time.time()
     query = extract_features(model, query_loader, resolved_device)
     gallery = extract_features(model, gallery_loader, resolved_device)
+    _log(f"dataset_name={normalized_dataset_name}", log_file)
     _log(f"query_features={tuple(query.features.shape)}", log_file)
     _log(f"gallery_features={tuple(gallery.features.shape)}", log_file)
+    _log(f"query_chunk_size={query_chunk_size}", log_file)
 
-    if distance == "cosine":
-        distmat = cosine_distance(query.features, gallery.features)
-    else:
-        distmat = pairwise_distance(query.features, gallery.features)
-
-    retrieval_metrics = evaluate_market1501(
-        distmat=distmat,
+    retrieval_metrics = evaluate_market_style_retrieval(
+        query_features=query.features,
+        gallery_features=gallery.features,
         query_pids=query.pids,
         gallery_pids=gallery.pids,
         query_camids=query.camids,
         gallery_camids=gallery.camids,
+        distance=distance,
         max_rank=10,
+        query_chunk_size=query_chunk_size,
+        compute_device=resolved_device,
     )
     return {
+        "dataset_name": normalized_dataset_name,
         "distance": distance,
+        "query_chunk_size": query_chunk_size,
         "rank1": _rank_at(retrieval_metrics.cmc, 1),
         "rank5": _rank_at(retrieval_metrics.cmc, 5),
         "rank10": _rank_at(retrieval_metrics.cmc, 10),
@@ -207,6 +232,35 @@ def evaluate_model_on_market1501(
         "num_gallery": int(gallery.features.shape[0]),
         "elapsed_seconds": time.time() - start_time,
     }
+
+
+def evaluate_model_on_market1501(
+    model: nn.Module,
+    data_root: str | Path,
+    image_size: tuple[int, int] = (256, 128),
+    device: str | torch.device | None = None,
+    batch_size: int = 64,
+    num_workers: int = 0,
+    distance: DistanceName = "cosine",
+    max_query: int | None = None,
+    max_gallery: int | None = None,
+    query_chunk_size: int = DEFAULT_QUERY_CHUNK_SIZE,
+    log_file: Path | None = None,
+) -> dict[str, Any]:
+    return evaluate_model_on_reid_dataset(
+        model=model,
+        dataset_name="market1501",
+        data_root=data_root,
+        image_size=image_size,
+        device=device,
+        batch_size=batch_size,
+        num_workers=num_workers,
+        distance=distance,
+        max_query=max_query,
+        max_gallery=max_gallery,
+        query_chunk_size=query_chunk_size,
+        log_file=log_file,
+    )
 
 
 def _limit_eval_samples(
@@ -231,13 +285,13 @@ def _limit_eval_samples(
 
 
 def _select_gallery_subset(
-    gallery_samples: list[Market1501Sample],
-    query_samples: list[Market1501Sample],
+    gallery_samples: list[ReIDSample],
+    query_samples: list[ReIDSample],
     max_gallery: int,
-) -> list[Market1501Sample]:
+) -> list[ReIDSample]:
     query_keys = {(sample.pid, sample.camid) for sample in query_samples}
-    preferred: list[Market1501Sample] = []
-    fallback: list[Market1501Sample] = []
+    preferred: list[ReIDSample] = []
+    fallback: list[ReIDSample] = []
     preferred_paths: set[Path] = set()
 
     for sample in gallery_samples:
