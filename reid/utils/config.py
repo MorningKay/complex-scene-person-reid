@@ -75,6 +75,8 @@ def validate_training_config(config: Config) -> None:
     max_batches = config["train"].get("max_batches")
     if max_batches is not None:
         _ensure_positive_int(max_batches, "train.max_batches")
+    if "amp" in config["train"] and not isinstance(config["train"]["amp"], bool):
+        raise ValueError("train.amp must be a boolean when provided")
 
     _ensure_non_negative_float(config["loss"]["label_smoothing"], "loss.label_smoothing")
     _ensure_positive_float(config["optimizer"]["lr"], "optimizer.lr")

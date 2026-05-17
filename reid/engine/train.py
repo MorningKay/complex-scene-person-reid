@@ -34,6 +34,8 @@ def train_one_epoch(
     max_batches: int | None = None,
     log_interval: int = 20,
     log_file: Path | None = None,
+    amp_enabled: bool = False,
+    scaler: torch.amp.GradScaler | None = None,
 ) -> dict[str, float | int]:
     model.train()
     total_loss = 0.0
@@ -50,11 +52,19 @@ def train_one_epoch(
         labels = _map_pids_to_labels(pids, pid_to_label, device)
 
         optimizer.zero_grad(set_to_none=True)
-        logits, _features = model(images)
-        ce_loss = criterion(logits, labels)
-        loss = ce_loss
-        loss.backward()
-        optimizer.step()
+        with torch.amp.autocast(device_type=device.type, enabled=amp_enabled):
+            logits, _features = model(images)
+            ce_loss = criterion(logits, labels)
+            loss = ce_loss
+        if amp_enabled:
+            if scaler is None:
+                raise ValueError("AMP training requires a GradScaler")
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            loss.backward()
+            optimizer.step()
 
         batch_size = images.shape[0]
         loss_value = float(loss.detach().cpu())
@@ -116,9 +126,11 @@ def run_training(
     _log(f"run_name={config['run']['name']}", log_file)
     _log(f"device={resolved_device}", log_file)
     dataset_name = _dataset_name(config)
+    amp_enabled = _amp_enabled(config, resolved_device)
     _log(f"dataset_name={dataset_name}", log_file)
     _log(f"model_pretrained={bool(config['model'].get('pretrained', False))}", log_file)
     _log(f"scheduler_name={_scheduler_name(config)}", log_file)
+    _log(f"amp_enabled={amp_enabled}", log_file)
 
     dataloader = build_reid_dataloader(
         name=dataset_name,
@@ -155,6 +167,7 @@ def run_training(
         lr=float(config["optimizer"]["lr"]),
         weight_decay=float(config["optimizer"]["weight_decay"]),
     )
+    scaler = torch.amp.GradScaler("cuda", enabled=amp_enabled)
 
     eval_config = config.get("eval", {})
     eval_enabled = bool(eval_config.get("enabled", False))
@@ -180,6 +193,8 @@ def run_training(
             max_batches=config["train"].get("max_batches"),
             log_interval=int(config["train"].get("log_interval", 20)),
             log_file=log_file,
+            amp_enabled=amp_enabled,
+            scaler=scaler,
         )
         epoch_metrics: dict[str, Any] = dict(train_metrics)
         history.append(epoch_metrics)
@@ -229,6 +244,7 @@ def run_training(
             "model": model.state_dict(),
             "optimizer": optimizer.state_dict(),
             "scheduler_state": _scheduler_state(config, optimizer, epoch),
+            "scaler": scaler.state_dict(),
             "epoch": epoch,
             "metrics": epoch_metrics,
             "config": config,
@@ -260,6 +276,7 @@ def run_training(
         "scheduler_state": _scheduler_state(
             config, optimizer, int(final_epoch_metrics["epoch"])
         ),
+        "amp_enabled": amp_enabled,
         "num_batches": final_epoch_metrics["num_batches"],
         "num_samples": final_epoch_metrics["num_samples"],
         "num_train_ids": num_train_ids,
@@ -302,6 +319,10 @@ def _resolve_device(device: str | torch.device | None) -> torch.device:
     if device is not None:
         return torch.device(device)
     return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
+def _amp_enabled(config: Config, device: torch.device) -> bool:
+    return bool(config["train"].get("amp", False)) and device.type == "cuda"
 
 
 def _dataset_name(config: Config) -> str:
@@ -424,6 +445,7 @@ def _write_run_summary(config: Config, metrics: dict[str, Any], output_path: Pat
             f"- device: {metrics['device']}",
             f"- model_pretrained: {bool(config['model'].get('pretrained', False))}",
             f"- scheduler_name: {metrics['scheduler_name']}",
+            f"- amp_enabled: {metrics['amp_enabled']}",
             f"- epochs: {config['train']['epochs']}",
             f"- num_train_ids: {metrics['num_train_ids']}",
             f"- final_avg_train_loss: {metrics['avg_train_loss']:.6f}",
