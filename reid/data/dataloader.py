@@ -10,13 +10,19 @@ from torch.utils.data import DataLoader
 
 from reid.data.common import SplitName
 from reid.data.market1501 import Market1501Dataset
+from reid.data.msmt17 import MSMT17Dataset
+from reid.data.occluded_reid import OccludedREIDDataset
 from reid.data.transforms import ImageSize, build_eval_transform, build_train_transform
+from reid.data.vc_clothes import VCClothesDataset
 
 DatasetBuilder = Callable[[str | Path, SplitName, Callable[[object], object] | None], object]
 ReIDBatchItem = tuple[torch.Tensor, int, int, str | Path]
 
 _DATASET_BUILDERS: dict[str, DatasetBuilder] = {
     "market1501": Market1501Dataset,
+    "msmt17_v1": MSMT17Dataset,
+    "occluded_reid": OccludedREIDDataset,
+    "vc_clothes": VCClothesDataset,
 }
 
 
@@ -90,6 +96,10 @@ def normalize_dataset_name(name: str | None) -> str:
     aliases = {
         "market_1501": "market1501",
         "market1501": "market1501",
+        "msmt17": "msmt17_v1",
+        "msmt17_v1": "msmt17_v1",
+        "occluded_reid": "occluded_reid",
+        "vc_clothes": "vc_clothes",
     }
     return aliases.get(normalized, normalized)
 
