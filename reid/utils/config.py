@@ -58,6 +58,9 @@ def validate_training_config(config: Config) -> None:
             if key not in config[section]:
                 raise ValueError(f"Missing required config key: {section}.{key}")
 
+    data_name = config["data"].get("name")
+    if data_name is not None and not isinstance(data_name, str):
+        raise ValueError("data.name must be a string when provided")
     _ensure_positive_int(config["data"]["batch_size"], "data.batch_size")
     _ensure_non_negative_int(config["data"]["num_workers"], "data.num_workers")
     _ensure_positive_int(config["model"]["num_classes"], "model.num_classes")

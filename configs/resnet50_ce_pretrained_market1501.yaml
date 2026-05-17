@@ -3,6 +3,7 @@ run:
   seed: 42
   smoke: false
 data:
+  name: market1501
   root: data/Market-1501-v15.09.15
   image_size: [256, 128]
   batch_size: 16

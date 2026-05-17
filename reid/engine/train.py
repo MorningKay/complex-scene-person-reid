@@ -12,7 +12,7 @@ import torch
 from torch import nn
 from torch.optim import Optimizer
 
-from reid.data import build_market1501_dataloader
+from reid.data import build_reid_dataloader, normalize_dataset_name
 from reid.engine.evaluate import evaluate_model_on_market1501
 from reid.losses import build_classification_loss
 from reid.models import resnet50_reid
@@ -35,7 +35,9 @@ def train_one_epoch(
 ) -> dict[str, float | int]:
     model.train()
     total_loss = 0.0
+    total_ce_loss = 0.0
     total_samples = 0
+    total_correct = 0
     num_batches = 0
 
     for batch_index, (images, pids, _camids, _paths) in enumerate(dataloader, start=1):
@@ -47,19 +49,28 @@ def train_one_epoch(
 
         optimizer.zero_grad(set_to_none=True)
         logits, _features = model(images)
-        loss = criterion(logits, labels)
+        ce_loss = criterion(logits, labels)
+        loss = ce_loss
         loss.backward()
         optimizer.step()
 
         batch_size = images.shape[0]
         loss_value = float(loss.detach().cpu())
+        ce_loss_value = float(ce_loss.detach().cpu())
+        batch_correct = int(logits.detach().argmax(dim=1).eq(labels).sum().cpu())
+        batch_id_acc = batch_correct / batch_size
+        lr = _current_lr(optimizer)
         total_loss += loss_value * batch_size
+        total_ce_loss += ce_loss_value * batch_size
         total_samples += batch_size
+        total_correct += batch_correct
         num_batches += 1
 
         if log_interval > 0 and batch_index % log_interval == 0:
             _log(
-                f"epoch={epoch} batch={batch_index} loss={loss_value:.6f}",
+                f"epoch={epoch} batch={batch_index} lr={lr:.8f} "
+                f"loss={loss_value:.6f} ce_loss={ce_loss_value:.6f} "
+                f"id_acc={batch_id_acc:.6f}",
                 log_file,
             )
 
@@ -67,9 +78,14 @@ def train_one_epoch(
         raise ValueError("No training batches were processed")
 
     avg_train_loss = total_loss / total_samples
+    avg_ce_loss = total_ce_loss / total_samples
+    train_id_acc = total_correct / total_samples
     return {
         "epoch": epoch,
         "avg_train_loss": avg_train_loss,
+        "avg_ce_loss": avg_ce_loss,
+        "train_id_acc": train_id_acc,
+        "lr": _current_lr(optimizer),
         "num_batches": num_batches,
         "num_samples": total_samples,
     }
@@ -97,9 +113,12 @@ def run_training(
 
     _log(f"run_name={config['run']['name']}", log_file)
     _log(f"device={resolved_device}", log_file)
+    dataset_name = _dataset_name(config)
+    _log(f"dataset_name={dataset_name}", log_file)
     _log(f"model_pretrained={bool(config['model'].get('pretrained', False))}", log_file)
 
-    dataloader = build_market1501_dataloader(
+    dataloader = build_reid_dataloader(
+        name=dataset_name,
         root=config["data"]["root"],
         split="train",
         batch_size=int(config["data"]["batch_size"]),
@@ -111,11 +130,12 @@ def run_training(
         drop_last=bool(config["data"].get("drop_last", False)),
     )
     pid_to_label = _build_pid_to_label(dataloader)
+    num_train_ids = len(pid_to_label)
     num_classes = int(config["model"]["num_classes"])
-    if num_classes != len(pid_to_label):
+    if num_classes != num_train_ids:
         raise ValueError(
             "model.num_classes must match the number of train identities, "
-            f"got {num_classes} and {len(pid_to_label)}"
+            f"got {num_classes} and {num_train_ids}"
         )
 
     model = resnet50_reid(
@@ -161,11 +181,19 @@ def run_training(
         history.append(epoch_metrics)
         _log(
             "epoch={epoch} avg_train_loss={avg_train_loss:.6f} "
-            "num_batches={num_batches} num_samples={num_samples}".format(**epoch_metrics),
+            "avg_ce_loss={avg_ce_loss:.6f} train_id_acc={train_id_acc:.6f} "
+            "lr={lr:.8f} num_batches={num_batches} num_samples={num_samples}".format(
+                **epoch_metrics
+            ),
             log_file,
         )
 
         if _should_evaluate_epoch(eval_config, epoch):
+            if dataset_name != "market1501":
+                raise ValueError(
+                    "Training-time evaluation currently supports only market1501; "
+                    "disable eval.enabled for other datasets until generic evaluation is implemented"
+                )
             eval_metrics = evaluate_model_on_market1501(
                 model=model,
                 data_root=config["data"]["root"],
@@ -211,11 +239,16 @@ def run_training(
     final_epoch_metrics = history[-1]
     metrics = {
         "run_name": config["run"]["name"],
+        "dataset_name": dataset_name,
         "device": str(resolved_device),
         "epoch": final_epoch_metrics["epoch"],
         "avg_train_loss": final_epoch_metrics["avg_train_loss"],
+        "avg_ce_loss": final_epoch_metrics["avg_ce_loss"],
+        "train_id_acc": final_epoch_metrics["train_id_acc"],
+        "lr": final_epoch_metrics["lr"],
         "num_batches": final_epoch_metrics["num_batches"],
         "num_samples": final_epoch_metrics["num_samples"],
+        "num_train_ids": num_train_ids,
         "best_epoch": best_epoch,
         "best_metric_name": best_metric_name,
         "best_avg_train_loss": _best_metric_value(best_epoch_metrics, "avg_train_loss"),
@@ -245,7 +278,7 @@ def _map_pids_to_labels(
 def _build_pid_to_label(dataloader: torch.utils.data.DataLoader) -> dict[int, int]:
     samples = getattr(dataloader.dataset, "samples", None)
     if samples is None:
-        raise ValueError("Dataloader dataset must expose Market-1501 samples")
+        raise ValueError("Dataloader dataset must expose Re-ID samples")
 
     pids = sorted({int(sample.pid) for sample in samples if int(sample.pid) >= 0})
     return {pid: label for label, pid in enumerate(pids)}
@@ -255,6 +288,14 @@ def _resolve_device(device: str | torch.device | None) -> torch.device:
     if device is not None:
         return torch.device(device)
     return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
+def _dataset_name(config: Config) -> str:
+    return normalize_dataset_name(config.get("data", {}).get("name"))
+
+
+def _current_lr(optimizer: Optimizer) -> float:
+    return float(optimizer.param_groups[0]["lr"])
 
 
 def _should_evaluate_epoch(eval_config: dict[str, Any], epoch: int) -> bool:
@@ -312,10 +353,14 @@ def _write_run_summary(config: Config, metrics: dict[str, Any], output_path: Pat
             "# Run Summary",
             "",
             f"- run_name: {config['run']['name']}",
+            f"- dataset_name: {metrics['dataset_name']}",
             f"- device: {metrics['device']}",
             f"- model_pretrained: {bool(config['model'].get('pretrained', False))}",
             f"- epochs: {config['train']['epochs']}",
+            f"- num_train_ids: {metrics['num_train_ids']}",
             f"- final_avg_train_loss: {metrics['avg_train_loss']:.6f}",
+            f"- final_avg_ce_loss: {metrics['avg_ce_loss']:.6f}",
+            f"- final_train_id_acc: {metrics['train_id_acc']:.6f}",
             f"- best_metric_name: {metrics['best_metric_name']}",
             f"- best_epoch: {metrics['best_epoch']}",
             f"- best_avg_train_loss: {_format_optional_metric(metrics['best_avg_train_loss'])}",
