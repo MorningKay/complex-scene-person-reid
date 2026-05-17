@@ -69,6 +69,7 @@ def validate_training_config(config: Config) -> None:
     if "pretrained" in config["model"] and not isinstance(config["model"]["pretrained"], bool):
         raise ValueError("model.pretrained must be a boolean when provided")
     _ensure_positive_int(config["train"]["epochs"], "train.epochs")
+    _validate_scheduler_config(config)
     _validate_eval_config(config)
 
     max_batches = config["train"].get("max_batches")
@@ -130,3 +131,34 @@ def _validate_eval_config(config: Config) -> None:
         value = eval_config.get(key)
         if value is not None:
             _ensure_positive_int(value, f"eval.{key}")
+
+
+def _validate_scheduler_config(config: Config) -> None:
+    if "scheduler" not in config:
+        return
+
+    scheduler_config = config["scheduler"]
+    if not isinstance(scheduler_config, dict):
+        raise ValueError("Config section must be a mapping: scheduler")
+
+    name = scheduler_config.get("name")
+    if name != "cosine":
+        raise ValueError("scheduler.name must be one of: cosine")
+
+    for key in ("min_lr", "warmup_epochs", "warmup_factor"):
+        if key not in scheduler_config:
+            raise ValueError(f"Missing required config key: scheduler.{key}")
+
+    min_lr = scheduler_config["min_lr"]
+    _ensure_non_negative_float(min_lr, "scheduler.min_lr")
+    if float(min_lr) > float(config["optimizer"]["lr"]):
+        raise ValueError("scheduler.min_lr must be less than or equal to optimizer.lr")
+
+    _ensure_non_negative_int(scheduler_config["warmup_epochs"], "scheduler.warmup_epochs")
+    if scheduler_config["warmup_epochs"] > config["train"]["epochs"]:
+        raise ValueError("scheduler.warmup_epochs must be less than or equal to train.epochs")
+
+    warmup_factor = scheduler_config["warmup_factor"]
+    _ensure_positive_float(warmup_factor, "scheduler.warmup_factor")
+    if float(warmup_factor) > 1:
+        raise ValueError("scheduler.warmup_factor must be less than or equal to 1")

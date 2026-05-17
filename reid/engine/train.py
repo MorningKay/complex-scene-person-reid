@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import shutil
 import time
 from pathlib import Path
@@ -117,6 +118,7 @@ def run_training(
     dataset_name = _dataset_name(config)
     _log(f"dataset_name={dataset_name}", log_file)
     _log(f"model_pretrained={bool(config['model'].get('pretrained', False))}", log_file)
+    _log(f"scheduler_name={_scheduler_name(config)}", log_file)
 
     dataloader = build_reid_dataloader(
         name=dataset_name,
@@ -166,6 +168,7 @@ def run_training(
     start_time = time.time()
 
     for epoch in range(1, int(config["train"]["epochs"]) + 1):
+        _set_epoch_lr(optimizer, config, epoch)
         train_metrics = train_one_epoch(
             model=model,
             dataloader=dataloader,
@@ -225,6 +228,7 @@ def run_training(
         checkpoint = {
             "model": model.state_dict(),
             "optimizer": optimizer.state_dict(),
+            "scheduler_state": _scheduler_state(config, optimizer, epoch),
             "epoch": epoch,
             "metrics": epoch_metrics,
             "config": config,
@@ -252,6 +256,10 @@ def run_training(
         "avg_ce_loss": final_epoch_metrics["avg_ce_loss"],
         "train_id_acc": final_epoch_metrics["train_id_acc"],
         "lr": final_epoch_metrics["lr"],
+        "scheduler_name": _scheduler_name(config),
+        "scheduler_state": _scheduler_state(
+            config, optimizer, int(final_epoch_metrics["epoch"])
+        ),
         "num_batches": final_epoch_metrics["num_batches"],
         "num_samples": final_epoch_metrics["num_samples"],
         "num_train_ids": num_train_ids,
@@ -302,6 +310,59 @@ def _dataset_name(config: Config) -> str:
 
 def _current_lr(optimizer: Optimizer) -> float:
     return float(optimizer.param_groups[0]["lr"])
+
+
+def _scheduler_name(config: Config) -> str:
+    scheduler_config = config.get("scheduler")
+    if not scheduler_config:
+        return "constant"
+    return str(scheduler_config["name"])
+
+
+def _set_epoch_lr(optimizer: Optimizer, config: Config, epoch: int) -> float:
+    lr = _compute_epoch_lr(config, epoch)
+    for param_group in optimizer.param_groups:
+        param_group["lr"] = lr
+    return lr
+
+
+def _compute_epoch_lr(config: Config, epoch: int) -> float:
+    base_lr = float(config["optimizer"]["lr"])
+    scheduler_config = config.get("scheduler")
+    if not scheduler_config:
+        return base_lr
+
+    total_epochs = int(config["train"]["epochs"])
+    min_lr = float(scheduler_config["min_lr"])
+    warmup_epochs = int(scheduler_config["warmup_epochs"])
+    warmup_factor = float(scheduler_config["warmup_factor"])
+
+    if warmup_epochs > 0 and epoch <= warmup_epochs:
+        if warmup_epochs == 1:
+            return base_lr
+        progress = (epoch - 1) / (warmup_epochs - 1)
+        return base_lr * (warmup_factor + progress * (1 - warmup_factor))
+
+    decay_epochs = total_epochs - warmup_epochs
+    if decay_epochs <= 1:
+        return base_lr
+
+    decay_index = epoch - warmup_epochs
+    progress = (decay_index - 1) / (decay_epochs - 1)
+    cosine = 0.5 * (1 + math.cos(math.pi * progress))
+    return min_lr + (base_lr - min_lr) * cosine
+
+
+def _scheduler_state(
+    config: Config,
+    optimizer: Optimizer,
+    epoch: int,
+) -> dict[str, float | int | str]:
+    return {
+        "name": _scheduler_name(config),
+        "last_epoch": epoch,
+        "lr": _current_lr(optimizer),
+    }
 
 
 def _should_evaluate_epoch(eval_config: dict[str, Any], epoch: int) -> bool:
@@ -362,6 +423,7 @@ def _write_run_summary(config: Config, metrics: dict[str, Any], output_path: Pat
             f"- dataset_name: {metrics['dataset_name']}",
             f"- device: {metrics['device']}",
             f"- model_pretrained: {bool(config['model'].get('pretrained', False))}",
+            f"- scheduler_name: {metrics['scheduler_name']}",
             f"- epochs: {config['train']['epochs']}",
             f"- num_train_ids: {metrics['num_train_ids']}",
             f"- final_avg_train_loss: {metrics['avg_train_loss']:.6f}",
