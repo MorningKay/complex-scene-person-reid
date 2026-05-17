@@ -77,6 +77,9 @@ def validate_training_config(config: Config) -> None:
         _ensure_positive_int(max_batches, "train.max_batches")
     if "amp" in config["train"] and not isinstance(config["train"]["amp"], bool):
         raise ValueError("train.amp must be a boolean when provided")
+    grad_clip_norm = config["train"].get("grad_clip_norm")
+    if grad_clip_norm is not None:
+        _ensure_positive_float(grad_clip_norm, "train.grad_clip_norm")
 
     _ensure_non_negative_float(config["loss"]["label_smoothing"], "loss.label_smoothing")
     _ensure_positive_float(config["optimizer"]["lr"], "optimizer.lr")

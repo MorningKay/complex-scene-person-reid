@@ -36,6 +36,7 @@ def train_one_epoch(
     log_file: Path | None = None,
     amp_enabled: bool = False,
     scaler: torch.amp.GradScaler | None = None,
+    grad_clip_norm: float | None = None,
 ) -> dict[str, float | int]:
     model.train()
     total_loss = 0.0
@@ -60,10 +61,15 @@ def train_one_epoch(
             if scaler is None:
                 raise ValueError("AMP training requires a GradScaler")
             scaler.scale(loss).backward()
+            if grad_clip_norm is not None:
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip_norm)
             scaler.step(optimizer)
             scaler.update()
         else:
             loss.backward()
+            if grad_clip_norm is not None:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip_norm)
             optimizer.step()
 
         batch_size = images.shape[0]
@@ -127,10 +133,12 @@ def run_training(
     _log(f"device={resolved_device}", log_file)
     dataset_name = _dataset_name(config)
     amp_enabled = _amp_enabled(config, resolved_device)
+    grad_clip_norm = _grad_clip_norm(config)
     _log(f"dataset_name={dataset_name}", log_file)
     _log(f"model_pretrained={bool(config['model'].get('pretrained', False))}", log_file)
     _log(f"scheduler_name={_scheduler_name(config)}", log_file)
     _log(f"amp_enabled={amp_enabled}", log_file)
+    _log(f"grad_clip_norm={_format_optional_metric(grad_clip_norm)}", log_file)
 
     dataloader = build_reid_dataloader(
         name=dataset_name,
@@ -195,6 +203,7 @@ def run_training(
             log_file=log_file,
             amp_enabled=amp_enabled,
             scaler=scaler,
+            grad_clip_norm=grad_clip_norm,
         )
         epoch_metrics: dict[str, Any] = dict(train_metrics)
         history.append(epoch_metrics)
@@ -277,6 +286,7 @@ def run_training(
             config, optimizer, int(final_epoch_metrics["epoch"])
         ),
         "amp_enabled": amp_enabled,
+        "grad_clip_norm": grad_clip_norm,
         "num_batches": final_epoch_metrics["num_batches"],
         "num_samples": final_epoch_metrics["num_samples"],
         "num_train_ids": num_train_ids,
@@ -323,6 +333,13 @@ def _resolve_device(device: str | torch.device | None) -> torch.device:
 
 def _amp_enabled(config: Config, device: torch.device) -> bool:
     return bool(config["train"].get("amp", False)) and device.type == "cuda"
+
+
+def _grad_clip_norm(config: Config) -> float | None:
+    value = config["train"].get("grad_clip_norm")
+    if value is None:
+        return None
+    return float(value)
 
 
 def _dataset_name(config: Config) -> str:
@@ -446,6 +463,7 @@ def _write_run_summary(config: Config, metrics: dict[str, Any], output_path: Pat
             f"- model_pretrained: {bool(config['model'].get('pretrained', False))}",
             f"- scheduler_name: {metrics['scheduler_name']}",
             f"- amp_enabled: {metrics['amp_enabled']}",
+            f"- grad_clip_norm: {_format_optional_metric(metrics['grad_clip_norm'])}",
             f"- epochs: {config['train']['epochs']}",
             f"- num_train_ids: {metrics['num_train_ids']}",
             f"- final_avg_train_loss: {metrics['avg_train_loss']:.6f}",
