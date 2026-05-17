@@ -185,6 +185,40 @@ def test_run_training_accepts_msmt17_dataset_name(tmp_path: Path) -> None:
     assert "id_acc=" in train_log
 
 
+def test_run_training_accepts_msmt17_training_time_eval(tmp_path: Path) -> None:
+    if not MSMT17_ROOT.is_dir():
+        pytest.skip(f"MSMT17_V1 dataset not found at {MSMT17_ROOT}")
+
+    config = make_smoke_config()
+    config["run"]["name"] = "pytest_msmt17_eval_smoke"
+    config["data"]["name"] = "msmt17_v1"
+    config["data"]["root"] = str(MSMT17_ROOT)
+    config["model"]["num_classes"] = 1041
+    config["eval"]["max_query"] = 8
+    config["eval"]["max_gallery"] = 64
+    config["eval"]["query_chunk_size"] = 2
+    output_dir = tmp_path / "msmt17_eval_run"
+
+    metrics = run_training(config=config, output_dir=output_dir, device="cpu")
+
+    assert metrics["dataset_name"] == "msmt17_v1"
+    assert metrics["best_metric_name"] == "mAP"
+    assert metrics["best_mAP"] is not None
+    assert metrics["history"][0]["eval"]["dataset_name"] == "msmt17_v1"
+    assert metrics["history"][0]["eval"]["query_chunk_size"] == 2
+    assert metrics["history"][0]["eval"]["num_query"] == 8
+    assert metrics["history"][0]["eval"]["num_gallery"] == 64
+
+    checkpoint = torch.load(output_dir / "ckpt" / "best.pth", map_location="cpu")
+    assert checkpoint["metrics"]["eval"]["dataset_name"] == "msmt17_v1"
+    assert checkpoint["metrics"]["eval"]["query_chunk_size"] == 2
+
+    train_log = (output_dir / "logs" / "train.txt").read_text(encoding="utf-8")
+    assert "dataset_name=msmt17_v1" in train_log
+    assert "query_chunk_size=2" in train_log
+    assert "mAP=" in train_log
+
+
 @pytest.mark.parametrize(
     ("key", "value", "message"),
     [
@@ -192,6 +226,7 @@ def test_run_training_accepts_msmt17_dataset_name(tmp_path: Path) -> None:
         ("batch_size", 0, "eval.batch_size"),
         ("num_workers", -1, "eval.num_workers"),
         ("distance", "bad", "eval.distance"),
+        ("query_chunk_size", 0, "eval.query_chunk_size"),
     ],
 )
 def test_validate_training_config_rejects_invalid_eval_config(
