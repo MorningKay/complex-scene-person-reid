@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Literal
+from typing import Callable
 
 from PIL import Image
 
-SplitName = Literal["train", "query", "gallery"]
+from reid.data.common import ReIDSample, SplitName
 
 _FILENAME_RE = re.compile(r"^(?P<pid>-?\d+)_c(?P<camid>\d+)s\d+_\d+_\d+(?:\.jpg)+$")
 _SPLIT_DIRS: dict[SplitName, str] = {
@@ -19,11 +18,7 @@ _SPLIT_DIRS: dict[SplitName, str] = {
 }
 
 
-@dataclass(frozen=True)
-class Market1501Sample:
-    path: Path
-    pid: int
-    camid: int
+Market1501Sample = ReIDSample
 
 
 def parse_market1501_filename(filename: str | Path) -> tuple[int, int]:
@@ -61,7 +56,7 @@ def list_market1501_split(root: str | Path, split: SplitName) -> list[Market1501
             continue
 
         pid, camid = parse_market1501_filename(path.name)
-        samples.append(Market1501Sample(path=path, pid=pid, camid=camid))
+        samples.append(ReIDSample(path=path, pid=pid, camid=camid))
 
     return samples
 
