@@ -13,12 +13,13 @@ from torch import nn
 from torch.optim import Optimizer
 
 from reid.data import build_reid_dataloader, normalize_dataset_name
-from reid.engine.evaluate import evaluate_model_on_market1501
+from reid.engine.evaluate import DEFAULT_QUERY_CHUNK_SIZE, evaluate_model_on_reid_dataset
 from reid.losses import build_classification_loss
 from reid.models import resnet50_reid
 from reid.utils import set_seed, validate_training_config, write_config
 
 Config = dict[str, Any]
+_TRAINING_EVAL_DATASETS = {"market1501", "msmt17_v1"}
 
 
 def train_one_epoch(
@@ -189,13 +190,15 @@ def run_training(
         )
 
         if _should_evaluate_epoch(eval_config, epoch):
-            if dataset_name != "market1501":
+            if dataset_name not in _TRAINING_EVAL_DATASETS:
+                valid = ", ".join(sorted(_TRAINING_EVAL_DATASETS))
                 raise ValueError(
-                    "Training-time evaluation currently supports only market1501; "
-                    "disable eval.enabled for other datasets until generic evaluation is implemented"
+                    f"Training-time evaluation currently supports only: {valid}; "
+                    f"disable eval.enabled for {dataset_name}"
                 )
-            eval_metrics = evaluate_model_on_market1501(
+            eval_metrics = evaluate_model_on_reid_dataset(
                 model=model,
+                dataset_name=dataset_name,
                 data_root=config["data"]["root"],
                 image_size=tuple(config["data"].get("image_size", (256, 128))),
                 device=resolved_device,
@@ -204,6 +207,9 @@ def run_training(
                 distance=eval_config["distance"],
                 max_query=eval_config.get("max_query"),
                 max_gallery=eval_config.get("max_gallery"),
+                query_chunk_size=int(
+                    eval_config.get("query_chunk_size", DEFAULT_QUERY_CHUNK_SIZE)
+                ),
                 log_file=log_file,
             )
             epoch_metrics["eval"] = eval_metrics

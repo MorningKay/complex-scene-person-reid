@@ -126,7 +126,7 @@ def _validate_eval_config(config: Config) -> None:
     if eval_config["distance"] not in {"cosine", "euclidean"}:
         raise ValueError("eval.distance must be one of: cosine, euclidean")
 
-    for key in ("max_query", "max_gallery"):
+    for key in ("max_query", "max_gallery", "query_chunk_size"):
         value = eval_config.get(key)
         if value is not None:
             _ensure_positive_int(value, f"eval.{key}")
