@@ -13,7 +13,16 @@ from torch import nn
 
 from reid.data import build_reid_dataloader, normalize_dataset_name
 from reid.data.common import ReIDSample
-from reid.evaluation import evaluate_market_style_retrieval
+from reid.evaluation import (
+    DEFAULT_RERANK_K1,
+    DEFAULT_RERANK_K2,
+    DEFAULT_RERANK_LAMBDA,
+    DEFAULT_RERANK_NEIGHBOR_CHUNK_SIZE,
+    DEFAULT_RERANK_QUERY_CHUNK_SIZE,
+    RetrievalMetrics,
+    evaluate_market_style_reranking,
+    evaluate_market_style_retrieval,
+)
 from reid.models import build_reid_model
 from reid.utils import configure_torch_multiprocessing_sharing
 
@@ -99,6 +108,12 @@ def run_evaluation(
     max_query: int | None = None,
     max_gallery: int | None = None,
     query_chunk_size: int = DEFAULT_QUERY_CHUNK_SIZE,
+    rerank: bool = False,
+    rerank_k1: int = DEFAULT_RERANK_K1,
+    rerank_k2: int = DEFAULT_RERANK_K2,
+    rerank_lambda: float = DEFAULT_RERANK_LAMBDA,
+    rerank_neighbor_chunk_size: int = DEFAULT_RERANK_NEIGHBOR_CHUNK_SIZE,
+    rerank_query_chunk_size: int = DEFAULT_RERANK_QUERY_CHUNK_SIZE,
 ) -> dict[str, Any]:
     sharing_strategy = configure_torch_multiprocessing_sharing()
     output_path = Path(output_dir)
@@ -119,6 +134,13 @@ def run_evaluation(
     _log(f"dataset_name={normalized_dataset_name}", log_file)
     _log(f"distance={distance}", log_file)
     _log(f"query_chunk_size={query_chunk_size}", log_file)
+    _log(f"rerank={rerank}", log_file)
+    if rerank:
+        _log(f"rerank_k1={rerank_k1}", log_file)
+        _log(f"rerank_k2={rerank_k2}", log_file)
+        _log(f"rerank_lambda={float(rerank_lambda):.6f}", log_file)
+        _log(f"rerank_neighbor_chunk_size={rerank_neighbor_chunk_size}", log_file)
+        _log(f"rerank_query_chunk_size={rerank_query_chunk_size}", log_file)
 
     metrics = evaluate_model_on_reid_dataset(
         model=model,
@@ -132,6 +154,12 @@ def run_evaluation(
         max_query=max_query,
         max_gallery=max_gallery,
         query_chunk_size=query_chunk_size,
+        rerank=rerank,
+        rerank_k1=rerank_k1,
+        rerank_k2=rerank_k2,
+        rerank_lambda=rerank_lambda,
+        rerank_neighbor_chunk_size=rerank_neighbor_chunk_size,
+        rerank_query_chunk_size=rerank_query_chunk_size,
         log_file=log_file,
     )
     metrics = {"checkpoint": str(checkpoint_path), **metrics}
@@ -156,6 +184,12 @@ def evaluate_model_on_reid_dataset(
     max_query: int | None = None,
     max_gallery: int | None = None,
     query_chunk_size: int = DEFAULT_QUERY_CHUNK_SIZE,
+    rerank: bool = False,
+    rerank_k1: int = DEFAULT_RERANK_K1,
+    rerank_k2: int = DEFAULT_RERANK_K2,
+    rerank_lambda: float = DEFAULT_RERANK_LAMBDA,
+    rerank_neighbor_chunk_size: int = DEFAULT_RERANK_NEIGHBOR_CHUNK_SIZE,
+    rerank_query_chunk_size: int = DEFAULT_RERANK_QUERY_CHUNK_SIZE,
     log_file: Path | None = None,
 ) -> dict[str, Any]:
     configure_torch_multiprocessing_sharing()
@@ -174,6 +208,8 @@ def evaluate_model_on_reid_dataset(
         raise ValueError("num_workers must be non-negative")
     if query_chunk_size <= 0:
         raise ValueError("query_chunk_size must be positive")
+    if not isinstance(rerank, bool):
+        raise ValueError("rerank must be a boolean")
 
     resolved_device = _resolve_device(device)
     model.to(resolved_device)
@@ -218,8 +254,68 @@ def evaluate_model_on_reid_dataset(
         query_chunk_size=query_chunk_size,
         compute_device=resolved_device,
     )
+    metrics = _retrieval_metrics_to_dict(
+        retrieval_metrics,
+        dataset_name=normalized_dataset_name,
+        distance=distance,
+        query_chunk_size=query_chunk_size,
+        num_query=int(query.features.shape[0]),
+        num_gallery=int(gallery.features.shape[0]),
+        elapsed_seconds=time.time() - start_time,
+    )
+    if not rerank:
+        return metrics
+
+    rerank_metrics = evaluate_market_style_reranking(
+        query_features=query.features,
+        gallery_features=gallery.features,
+        query_pids=query.pids,
+        gallery_pids=gallery.pids,
+        query_camids=query.camids,
+        gallery_camids=gallery.camids,
+        distance=distance,
+        max_rank=10,
+        k1=rerank_k1,
+        k2=rerank_k2,
+        lambda_value=rerank_lambda,
+        neighbor_chunk_size=rerank_neighbor_chunk_size,
+        rerank_query_chunk_size=rerank_query_chunk_size,
+        compute_device=resolved_device,
+    )
+    reranked = _retrieval_metrics_to_dict(
+        rerank_metrics,
+        dataset_name=normalized_dataset_name,
+        distance=distance,
+        query_chunk_size=query_chunk_size,
+        num_query=int(query.features.shape[0]),
+        num_gallery=int(gallery.features.shape[0]),
+        elapsed_seconds=time.time() - start_time,
+    )
+    reranked.update(
+        {
+            "rerank_enabled": True,
+            "rerank_k1": rerank_k1,
+            "rerank_k2": rerank_k2,
+            "rerank_lambda": rerank_lambda,
+            "rerank_neighbor_chunk_size": rerank_neighbor_chunk_size,
+            "rerank_query_chunk_size": rerank_query_chunk_size,
+            "pre_rerank": metrics,
+        }
+    )
+    return reranked
+
+
+def _retrieval_metrics_to_dict(
+    retrieval_metrics: RetrievalMetrics,
+    dataset_name: str,
+    distance: DistanceName,
+    query_chunk_size: int,
+    num_query: int,
+    num_gallery: int,
+    elapsed_seconds: float,
+) -> dict[str, Any]:
     return {
-        "dataset_name": normalized_dataset_name,
+        "dataset_name": dataset_name,
         "distance": distance,
         "query_chunk_size": query_chunk_size,
         "rank1": _rank_at(retrieval_metrics.cmc, 1),
@@ -227,9 +323,9 @@ def evaluate_model_on_reid_dataset(
         "rank10": _rank_at(retrieval_metrics.cmc, 10),
         "mAP": retrieval_metrics.mAP,
         "num_valid_queries": retrieval_metrics.num_valid_queries,
-        "num_query": int(query.features.shape[0]),
-        "num_gallery": int(gallery.features.shape[0]),
-        "elapsed_seconds": time.time() - start_time,
+        "num_query": num_query,
+        "num_gallery": num_gallery,
+        "elapsed_seconds": elapsed_seconds,
     }
 
 

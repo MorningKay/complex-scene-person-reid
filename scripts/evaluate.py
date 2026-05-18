@@ -11,6 +11,13 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from reid.engine import run_evaluation
+from reid.evaluation import (
+    DEFAULT_RERANK_K1,
+    DEFAULT_RERANK_K2,
+    DEFAULT_RERANK_LAMBDA,
+    DEFAULT_RERANK_NEIGHBOR_CHUNK_SIZE,
+    DEFAULT_RERANK_QUERY_CHUNK_SIZE,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -50,6 +57,41 @@ def parse_args() -> argparse.Namespace:
         default=256,
         help="Number of query features evaluated per distance chunk.",
     )
+    parser.add_argument(
+        "--rerank",
+        action="store_true",
+        help="Apply k-reciprocal re-ranking as a post-hoc evaluation step.",
+    )
+    parser.add_argument(
+        "--rerank-k1",
+        type=int,
+        default=DEFAULT_RERANK_K1,
+        help="k1 neighborhood size for k-reciprocal re-ranking.",
+    )
+    parser.add_argument(
+        "--rerank-k2",
+        type=int,
+        default=DEFAULT_RERANK_K2,
+        help="k2 query expansion neighborhood size for re-ranking.",
+    )
+    parser.add_argument(
+        "--rerank-lambda",
+        type=float,
+        default=DEFAULT_RERANK_LAMBDA,
+        help="Original-distance weight for re-ranking final distance.",
+    )
+    parser.add_argument(
+        "--rerank-neighbor-chunk-size",
+        type=int,
+        default=DEFAULT_RERANK_NEIGHBOR_CHUNK_SIZE,
+        help="Chunk size for all-sample top-k neighbor search during re-ranking.",
+    )
+    parser.add_argument(
+        "--rerank-query-chunk-size",
+        type=int,
+        default=DEFAULT_RERANK_QUERY_CHUNK_SIZE,
+        help="Query chunk size for final re-ranked query-gallery distance evaluation.",
+    )
     return parser.parse_args()
 
 
@@ -67,6 +109,12 @@ def main() -> None:
         max_query=args.max_query,
         max_gallery=args.max_gallery,
         query_chunk_size=args.query_chunk_size,
+        rerank=args.rerank,
+        rerank_k1=args.rerank_k1,
+        rerank_k2=args.rerank_k2,
+        rerank_lambda=args.rerank_lambda,
+        rerank_neighbor_chunk_size=args.rerank_neighbor_chunk_size,
+        rerank_query_chunk_size=args.rerank_query_chunk_size,
     )
     print(f"eval_metrics_json={Path(args.output_dir) / 'eval_metrics.json'}", flush=True)
     print(f"rank1={metrics['rank1']:.6f}", flush=True)
