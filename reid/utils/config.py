@@ -20,7 +20,7 @@ _REQUIRED_TOP_LEVEL_KEYS = (
 _REQUIRED_NESTED_KEYS = {
     "run": ("name", "seed"),
     "data": ("root", "batch_size", "num_workers"),
-    "model": ("num_classes", "feature_dim", "last_stride"),
+    "model": ("num_classes", "feature_dim"),
     "loss": ("label_smoothing",),
     "optimizer": ("lr", "weight_decay"),
     "train": ("epochs",),
@@ -71,11 +71,9 @@ def validate_training_config(config: Config) -> None:
     _ensure_positive_int(config["data"]["batch_size"], "data.batch_size")
     _ensure_non_negative_int(config["data"]["num_workers"], "data.num_workers")
     _validate_sampler_config(config)
+    _validate_model_config(config)
     _ensure_positive_int(config["model"]["num_classes"], "model.num_classes")
     _ensure_positive_int(config["model"]["feature_dim"], "model.feature_dim")
-    _ensure_positive_int(config["model"]["last_stride"], "model.last_stride")
-    if "pretrained" in config["model"] and not isinstance(config["model"]["pretrained"], bool):
-        raise ValueError("model.pretrained must be a boolean when provided")
     _ensure_positive_int(config["train"]["epochs"], "train.epochs")
     _validate_scheduler_config(config)
     _validate_eval_config(config)
@@ -152,6 +150,33 @@ def _validate_eval_config(config: Config) -> None:
         value = eval_config.get(key)
         if value is not None:
             _ensure_positive_int(value, f"eval.{key}")
+
+
+def _validate_model_config(config: Config) -> None:
+    model_config = config["model"]
+    model_name = model_config.get("name", "resnet50")
+    if not isinstance(model_name, str):
+        raise ValueError("model.name must be a string when provided")
+    normalized_model_name = model_name.lower().replace("-", "_")
+    aliases = {
+        "resnet": "resnet50",
+        "resnet50": "resnet50",
+        "resnet_50": "resnet50",
+        "osnet": "osnet_x1_0",
+        "osnet_x1_0": "osnet_x1_0",
+    }
+    normalized_model_name = aliases.get(normalized_model_name, normalized_model_name)
+    if normalized_model_name not in {"resnet50", "osnet_x1_0"}:
+        raise ValueError("model.name must be one of: resnet50, osnet_x1_0")
+
+    last_stride = model_config.get("last_stride")
+    if last_stride is not None:
+        _ensure_positive_int(last_stride, "model.last_stride")
+    if "pretrained" in model_config and not isinstance(model_config["pretrained"], bool):
+        raise ValueError("model.pretrained must be a boolean when provided")
+    pretrained_path = model_config.get("pretrained_path")
+    if pretrained_path is not None and not isinstance(pretrained_path, str):
+        raise ValueError("model.pretrained_path must be a string when provided")
 
 
 def _validate_sampler_config(config: Config) -> None:

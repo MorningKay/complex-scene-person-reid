@@ -17,7 +17,7 @@ from torch.optim import Optimizer
 from reid.data import build_reid_dataloader, normalize_dataset_name
 from reid.engine.evaluate import DEFAULT_QUERY_CHUNK_SIZE, evaluate_model_on_reid_dataset
 from reid.losses import BatchHardTripletLoss, build_classification_loss
-from reid.models import resnet50_reid
+from reid.models import build_reid_model, normalize_model_name
 from reid.utils import (
     configure_torch_multiprocessing_sharing,
     set_seed,
@@ -161,6 +161,8 @@ def run_training(
     grad_clip_norm = _grad_clip_norm(config)
     random_erasing = bool(config["data"].get("random_erasing", False))
     random_erasing_prob = _random_erasing_prob(config)
+    model_name = _model_name(config)
+    model_pretrained_path = _model_pretrained_path(config)
     sampler_name = _sampler_name(config)
     sampler_num_pids = _sampler_num_pids(config)
     sampler_num_instances = _sampler_num_instances(config)
@@ -170,7 +172,9 @@ def run_training(
     triplet_weight = _triplet_weight(config)
     triplet_normalize_features = _triplet_normalize_features(config)
     _log(f"dataset_name={dataset_name}", log_file)
+    _log(f"model_name={model_name}", log_file)
     _log(f"model_pretrained={bool(config['model'].get('pretrained', False))}", log_file)
+    _log(f"model_pretrained_path={_format_optional_string(model_pretrained_path)}", log_file)
     _log(f"random_erasing={random_erasing}", log_file)
     _log(f"random_erasing_prob={random_erasing_prob:.6f}", log_file)
     _log(f"sampler_name={sampler_name}", log_file)
@@ -216,12 +220,7 @@ def run_training(
             f"got {num_classes} and {num_train_ids}"
         )
 
-    model = resnet50_reid(
-        num_classes=num_classes,
-        feature_dim=int(config["model"]["feature_dim"]),
-        last_stride=int(config["model"]["last_stride"]),
-        pretrained=bool(config["model"].get("pretrained", False)),
-    ).to(resolved_device)
+    model = build_reid_model(config, load_pretrained=resume_state is None).to(resolved_device)
     criterion = build_classification_loss(
         label_smoothing=float(config["loss"]["label_smoothing"])
     )
@@ -357,6 +356,9 @@ def run_training(
         "dataset_name": dataset_name,
         "device": str(resolved_device),
         "epoch": final_epoch_metrics["epoch"],
+        "model_name": model_name,
+        "model_pretrained": bool(config["model"].get("pretrained", False)),
+        "model_pretrained_path": model_pretrained_path,
         "avg_train_loss": final_epoch_metrics["avg_train_loss"],
         "avg_ce_loss": final_epoch_metrics["avg_ce_loss"],
         "avg_triplet_loss": final_epoch_metrics["avg_triplet_loss"],
@@ -537,6 +539,17 @@ def _grad_clip_norm(config: Config) -> float | None:
 
 def _random_erasing_prob(config: Config) -> float:
     return float(config["data"].get("random_erasing_prob", 0.5))
+
+
+def _model_name(config: Config) -> str:
+    return normalize_model_name(config.get("model", {}).get("name"))
+
+
+def _model_pretrained_path(config: Config) -> str | None:
+    value = config["model"].get("pretrained_path")
+    if value is None:
+        return None
+    return str(value)
 
 
 def _sampler_name(config: Config) -> str:
@@ -726,7 +739,9 @@ def _write_run_summary(config: Config, metrics: dict[str, Any], output_path: Pat
             f"- run_name: {config['run']['name']}",
             f"- dataset_name: {metrics['dataset_name']}",
             f"- device: {metrics['device']}",
-            f"- model_pretrained: {bool(config['model'].get('pretrained', False))}",
+            f"- model_name: {metrics['model_name']}",
+            f"- model_pretrained: {metrics['model_pretrained']}",
+            f"- model_pretrained_path: {_format_optional_string(metrics['model_pretrained_path'])}",
             f"- random_erasing: {metrics['random_erasing']}",
             f"- random_erasing_prob: {metrics['random_erasing_prob']:.6f}",
             f"- sampler_name: {metrics['sampler_name']}",
@@ -770,3 +785,9 @@ def _format_optional_int(value: int | None) -> str:
     if value is None:
         return "null"
     return str(value)
+
+
+def _format_optional_string(value: str | None) -> str:
+    if value is None:
+        return "null"
+    return value

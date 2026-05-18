@@ -14,7 +14,7 @@ from torch import nn
 from reid.data import build_reid_dataloader, normalize_dataset_name
 from reid.data.common import ReIDSample
 from reid.evaluation import evaluate_market_style_retrieval
-from reid.models import resnet50_reid
+from reid.models import build_reid_model
 from reid.utils import configure_torch_multiprocessing_sharing
 
 Config = dict[str, Any]
@@ -47,12 +47,7 @@ def load_model_from_checkpoint(
     if not isinstance(config, dict) or "model" not in config:
         raise ValueError("Checkpoint config is missing required section: model")
 
-    model_config = config["model"]
-    model = resnet50_reid(
-        num_classes=int(model_config["num_classes"]),
-        feature_dim=int(model_config["feature_dim"]),
-        last_stride=int(model_config["last_stride"]),
-    )
+    model = build_reid_model(config, load_pretrained=False)
     model.load_state_dict(checkpoint["model"])
     resolved_device = _resolve_device(device)
     model.to(resolved_device)

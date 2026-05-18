@@ -18,6 +18,7 @@ from reid.models.resnet_reid import (
     load_resnet50_backbone_state_dict,
     resnet50_reid,
 )
+from reid.models.registry import build_reid_model, normalize_model_name
 
 __all__ = [
     "ChannelGate",
@@ -28,10 +29,12 @@ __all__ = [
     "OSBlock",
     "OSNetReID",
     "ResNetReID",
+    "build_reid_model",
     "load_imagenet_osnet_weights",
     "load_imagenet_resnet50_weights",
     "load_osnet_backbone_state_dict",
     "load_resnet50_backbone_state_dict",
+    "normalize_model_name",
     "osnet_x1_0_reid",
     "resnet50_reid",
 ]
