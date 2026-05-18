@@ -25,6 +25,15 @@ def _as_1d_long_tensor(values: Sequence[int] | torch.Tensor, name: str) -> torch
     return tensor.cpu()
 
 
+def _as_optional_1d_long_tensor(
+    values: Sequence[int] | torch.Tensor | None,
+    name: str,
+) -> torch.Tensor | None:
+    if values is None:
+        return None
+    return _as_1d_long_tensor(values, name)
+
+
 def _validate_market1501_inputs(
     distmat: torch.Tensor,
     query_pids: torch.Tensor,
@@ -75,6 +84,8 @@ def _validate_query_gallery_lengths(
     gallery_pids: torch.Tensor,
     query_camids: torch.Tensor,
     gallery_camids: torch.Tensor,
+    query_clothes_ids: torch.Tensor | None = None,
+    gallery_clothes_ids: torch.Tensor | None = None,
 ) -> None:
     if num_query != query_pids.numel():
         raise ValueError(
@@ -89,6 +100,10 @@ def _validate_query_gallery_lengths(
         raise ValueError("query_camids must have the same length as query_pids")
     if gallery_camids.numel() != gallery_pids.numel():
         raise ValueError("gallery_camids must have the same length as gallery_pids")
+    if query_clothes_ids is not None and query_clothes_ids.numel() != num_query:
+        raise ValueError("query_clothes_ids must have the same length as query_pids")
+    if gallery_clothes_ids is not None and gallery_clothes_ids.numel() != num_gallery:
+        raise ValueError("gallery_clothes_ids must have the same length as gallery_pids")
 
 
 def evaluate_market1501(
@@ -135,6 +150,9 @@ def evaluate_market_style_retrieval(
     max_rank: int = 50,
     query_chunk_size: int = 256,
     compute_device: str | torch.device | None = None,
+    query_clothes_ids: Sequence[int] | torch.Tensor | None = None,
+    gallery_clothes_ids: Sequence[int] | torch.Tensor | None = None,
+    clothes_changing: bool = False,
 ) -> RetrievalMetrics:
     """Evaluate CMC and mAP from features with Market-style filtering.
 
@@ -148,6 +166,8 @@ def evaluate_market_style_retrieval(
         raise ValueError(f"max_rank must be positive, got {max_rank}")
     if query_chunk_size <= 0:
         raise ValueError(f"query_chunk_size must be positive, got {query_chunk_size}")
+    if not isinstance(clothes_changing, bool):
+        raise ValueError("clothes_changing must be a boolean")
 
     query_features = torch.as_tensor(query_features).detach()
     gallery_features = torch.as_tensor(gallery_features).detach()
@@ -156,6 +176,12 @@ def evaluate_market_style_retrieval(
     gallery_pids = _as_1d_long_tensor(gallery_pids, "gallery_pids")
     query_camids = _as_1d_long_tensor(query_camids, "query_camids")
     gallery_camids = _as_1d_long_tensor(gallery_camids, "gallery_camids")
+    query_clothes_ids = _as_optional_1d_long_tensor(query_clothes_ids, "query_clothes_ids")
+    gallery_clothes_ids = _as_optional_1d_long_tensor(gallery_clothes_ids, "gallery_clothes_ids")
+    if clothes_changing and (query_clothes_ids is None or gallery_clothes_ids is None):
+        raise ValueError(
+            "query_clothes_ids and gallery_clothes_ids are required for clothes-changing metrics"
+        )
     _validate_query_gallery_lengths(
         num_query=query_features.shape[0],
         num_gallery=gallery_features.shape[0],
@@ -163,6 +189,8 @@ def evaluate_market_style_retrieval(
         gallery_pids=gallery_pids,
         query_camids=query_camids,
         gallery_camids=gallery_camids,
+        query_clothes_ids=query_clothes_ids,
+        gallery_clothes_ids=gallery_clothes_ids,
     )
 
     max_rank = min(max_rank, gallery_pids.numel())
@@ -188,12 +216,58 @@ def evaluate_market_style_retrieval(
             max_rank=max_rank,
             all_cmc=all_cmc,
             all_ap=all_ap,
+            query_clothes_ids=query_clothes_ids,
+            gallery_clothes_ids=gallery_clothes_ids,
+            clothes_changing=clothes_changing,
         )
 
     return _finalize_metrics(
         all_cmc,
         all_ap,
-        empty_message="No valid Market-style query with at least one gallery match",
+        empty_message=(
+            "No valid clothes-changing query with at least one different-clothes gallery match"
+            if clothes_changing
+            else "No valid Market-style query with at least one gallery match"
+        ),
+    )
+
+
+def evaluate_clothes_changing_retrieval(
+    query_features: torch.Tensor,
+    gallery_features: torch.Tensor,
+    query_pids: Sequence[int] | torch.Tensor,
+    gallery_pids: Sequence[int] | torch.Tensor,
+    query_camids: Sequence[int] | torch.Tensor,
+    gallery_camids: Sequence[int] | torch.Tensor,
+    query_clothes_ids: Sequence[int] | torch.Tensor,
+    gallery_clothes_ids: Sequence[int] | torch.Tensor,
+    distance: DistanceName = "cosine",
+    max_rank: int = 50,
+    query_chunk_size: int = 256,
+    compute_device: str | torch.device | None = None,
+) -> RetrievalMetrics:
+    """Evaluate VC-Clothes clothes-changing retrieval protocol.
+
+    This protocol keeps the standard Re-ID junk and same-camera filtering, then
+    additionally removes same-identity gallery samples wearing the same clothes
+    as the query. Queries without any different-clothes positive gallery sample
+    are skipped.
+    """
+
+    return evaluate_market_style_retrieval(
+        query_features=query_features,
+        gallery_features=gallery_features,
+        query_pids=query_pids,
+        gallery_pids=gallery_pids,
+        query_camids=query_camids,
+        gallery_camids=gallery_camids,
+        distance=distance,
+        max_rank=max_rank,
+        query_chunk_size=query_chunk_size,
+        compute_device=compute_device,
+        query_clothes_ids=query_clothes_ids,
+        gallery_clothes_ids=gallery_clothes_ids,
+        clothes_changing=True,
     )
 
 
@@ -247,6 +321,9 @@ def _append_query_metrics(
     max_rank: int,
     all_cmc: list[torch.Tensor],
     all_ap: list[float],
+    query_clothes_ids: torch.Tensor | None = None,
+    gallery_clothes_ids: torch.Tensor | None = None,
+    clothes_changing: bool = False,
 ) -> None:
     for row_index in range(indices.shape[0]):
         query_index = query_offset + row_index
@@ -257,6 +334,14 @@ def _append_query_metrics(
         remove = (gallery_pids[order] == -1) | (
             (gallery_pids[order] == query_pid) & (gallery_camids[order] == query_camid)
         )
+        if clothes_changing:
+            if query_clothes_ids is None or gallery_clothes_ids is None:
+                raise ValueError("clothes ids are required for clothes-changing metrics")
+            query_clothes_id = query_clothes_ids[query_index]
+            remove = remove | (
+                (gallery_pids[order] == query_pid)
+                & (gallery_clothes_ids[order] == query_clothes_id)
+            )
         keep = ~remove
         matches = (gallery_pids[order][keep] == query_pid).to(torch.float32)
         if matches.numel() == 0 or matches.sum() == 0:

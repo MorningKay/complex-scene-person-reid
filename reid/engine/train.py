@@ -26,7 +26,7 @@ from reid.utils import (
 )
 
 Config = dict[str, Any]
-_TRAINING_EVAL_DATASETS = {"market1501", "msmt17_v1"}
+_TRAINING_EVAL_DATASETS = {"market1501", "msmt17_v1", "vc_clothes"}
 
 
 def train_one_epoch(
@@ -326,6 +326,18 @@ def run_training(
                 ),
                 log_file,
             )
+            clothes_changing = eval_metrics.get("clothes_changing")
+            if isinstance(clothes_changing, dict):
+                _log(
+                    "epoch={epoch} clothes_changing_rank1={rank1:.6f} "
+                    "clothes_changing_rank5={rank5:.6f} "
+                    "clothes_changing_rank10={rank10:.6f} "
+                    "clothes_changing_mAP={mAP:.6f}".format(
+                        epoch=epoch,
+                        **clothes_changing,
+                    ),
+                    log_file,
+                )
 
         checkpoint = {
             "model": model.state_dict(),
@@ -388,6 +400,18 @@ def run_training(
         "best_avg_train_loss": _best_metric_value(best_epoch_metrics, "avg_train_loss"),
         "best_mAP": _best_eval_metric_value(best_epoch_metrics, "mAP"),
         "best_rank1": _best_eval_metric_value(best_epoch_metrics, "rank1"),
+        "final_clothes_changing_mAP": _nested_eval_metric_value(
+            final_epoch_metrics, "clothes_changing", "mAP"
+        ),
+        "final_clothes_changing_rank1": _nested_eval_metric_value(
+            final_epoch_metrics, "clothes_changing", "rank1"
+        ),
+        "best_clothes_changing_mAP": _nested_eval_metric_value(
+            best_epoch_metrics, "clothes_changing", "mAP"
+        ),
+        "best_clothes_changing_rank1": _nested_eval_metric_value(
+            best_epoch_metrics, "clothes_changing", "rank1"
+        ),
         "elapsed_seconds": elapsed_seconds,
         "history": history,
     }
@@ -718,6 +742,22 @@ def _best_eval_metric_value(epoch_metrics: dict[str, Any] | None, name: str) -> 
     return float(epoch_metrics["eval"][name])
 
 
+def _nested_eval_metric_value(
+    epoch_metrics: dict[str, Any] | None,
+    section: str,
+    name: str,
+) -> float | None:
+    if epoch_metrics is None:
+        return None
+    eval_metrics = epoch_metrics.get("eval")
+    if not isinstance(eval_metrics, dict):
+        return None
+    nested = eval_metrics.get(section)
+    if not isinstance(nested, dict) or name not in nested:
+        return None
+    return float(nested[name])
+
+
 def _log(message: str, log_file: Path | None) -> None:
     print(message, flush=True)
     if log_file is not None:
@@ -732,46 +772,62 @@ def _write_json(data: dict[str, Any], path: Path) -> None:
 
 
 def _write_run_summary(config: Config, metrics: dict[str, Any], output_path: Path) -> None:
-    summary = "\n".join(
+    lines = [
+        "# Run Summary",
+        "",
+        f"- run_name: {config['run']['name']}",
+        f"- dataset_name: {metrics['dataset_name']}",
+        f"- device: {metrics['device']}",
+        f"- model_name: {metrics['model_name']}",
+        f"- model_pretrained: {metrics['model_pretrained']}",
+        f"- model_pretrained_path: {_format_optional_string(metrics['model_pretrained_path'])}",
+        f"- random_erasing: {metrics['random_erasing']}",
+        f"- random_erasing_prob: {metrics['random_erasing_prob']:.6f}",
+        f"- sampler_name: {metrics['sampler_name']}",
+        f"- sampler_num_pids: {_format_optional_int(metrics['sampler_num_pids'])}",
+        f"- sampler_num_instances: {_format_optional_int(metrics['sampler_num_instances'])}",
+        f"- sampler_batches_per_epoch: {_format_optional_int(metrics['sampler_batches_per_epoch'])}",
+        f"- triplet_enabled: {metrics['triplet_enabled']}",
+        f"- triplet_margin: {_format_optional_metric(metrics['triplet_margin'])}",
+        f"- triplet_weight: {_format_optional_metric(metrics['triplet_weight'])}",
+        f"- triplet_normalize_features: {metrics['triplet_normalize_features']}",
+        f"- scheduler_name: {metrics['scheduler_name']}",
+        f"- amp_enabled: {metrics['amp_enabled']}",
+        f"- grad_clip_norm: {_format_optional_metric(metrics['grad_clip_norm'])}",
+        f"- epochs: {config['train']['epochs']}",
+        f"- num_train_ids: {metrics['num_train_ids']}",
+        f"- final_avg_train_loss: {metrics['avg_train_loss']:.6f}",
+        f"- final_avg_ce_loss: {metrics['avg_ce_loss']:.6f}",
+        f"- final_avg_triplet_loss: {metrics['avg_triplet_loss']:.6f}",
+        f"- final_train_id_acc: {metrics['train_id_acc']:.6f}",
+        f"- best_metric_name: {metrics['best_metric_name']}",
+        f"- best_epoch: {metrics['best_epoch']}",
+        f"- best_avg_train_loss: {_format_optional_metric(metrics['best_avg_train_loss'])}",
+        f"- best_mAP: {_format_optional_metric(metrics['best_mAP'])}",
+        f"- best_rank1: {_format_optional_metric(metrics['best_rank1'])}",
+    ]
+    if metrics["final_clothes_changing_mAP"] is not None:
+        lines.extend(
+            [
+                "- final_clothes_changing_mAP: "
+                f"{_format_optional_metric(metrics['final_clothes_changing_mAP'])}",
+                "- final_clothes_changing_rank1: "
+                f"{_format_optional_metric(metrics['final_clothes_changing_rank1'])}",
+                "- best_clothes_changing_mAP: "
+                f"{_format_optional_metric(metrics['best_clothes_changing_mAP'])}",
+                "- best_clothes_changing_rank1: "
+                f"{_format_optional_metric(metrics['best_clothes_changing_rank1'])}",
+            ]
+        )
+    lines.extend(
         [
-            "# Run Summary",
-            "",
-            f"- run_name: {config['run']['name']}",
-            f"- dataset_name: {metrics['dataset_name']}",
-            f"- device: {metrics['device']}",
-            f"- model_name: {metrics['model_name']}",
-            f"- model_pretrained: {metrics['model_pretrained']}",
-            f"- model_pretrained_path: {_format_optional_string(metrics['model_pretrained_path'])}",
-            f"- random_erasing: {metrics['random_erasing']}",
-            f"- random_erasing_prob: {metrics['random_erasing_prob']:.6f}",
-            f"- sampler_name: {metrics['sampler_name']}",
-            f"- sampler_num_pids: {_format_optional_int(metrics['sampler_num_pids'])}",
-            f"- sampler_num_instances: {_format_optional_int(metrics['sampler_num_instances'])}",
-            f"- sampler_batches_per_epoch: {_format_optional_int(metrics['sampler_batches_per_epoch'])}",
-            f"- triplet_enabled: {metrics['triplet_enabled']}",
-            f"- triplet_margin: {_format_optional_metric(metrics['triplet_margin'])}",
-            f"- triplet_weight: {_format_optional_metric(metrics['triplet_weight'])}",
-            f"- triplet_normalize_features: {metrics['triplet_normalize_features']}",
-            f"- scheduler_name: {metrics['scheduler_name']}",
-            f"- amp_enabled: {metrics['amp_enabled']}",
-            f"- grad_clip_norm: {_format_optional_metric(metrics['grad_clip_norm'])}",
-            f"- epochs: {config['train']['epochs']}",
-            f"- num_train_ids: {metrics['num_train_ids']}",
-            f"- final_avg_train_loss: {metrics['avg_train_loss']:.6f}",
-            f"- final_avg_ce_loss: {metrics['avg_ce_loss']:.6f}",
-            f"- final_avg_triplet_loss: {metrics['avg_triplet_loss']:.6f}",
-            f"- final_train_id_acc: {metrics['train_id_acc']:.6f}",
-            f"- best_metric_name: {metrics['best_metric_name']}",
-            f"- best_epoch: {metrics['best_epoch']}",
-            f"- best_avg_train_loss: {_format_optional_metric(metrics['best_avg_train_loss'])}",
-            f"- best_mAP: {_format_optional_metric(metrics['best_mAP'])}",
-            f"- best_rank1: {_format_optional_metric(metrics['best_rank1'])}",
             f"- latest_checkpoint: {output_path / 'ckpt' / 'latest.pth'}",
             f"- best_checkpoint: {output_path / 'ckpt' / 'best.pth'}",
             f"- smoke: {bool(config['run'].get('smoke', False))}",
             "",
         ]
     )
+    summary = "\n".join(lines)
     (output_path / "run_summary.md").write_text(summary, encoding="utf-8")
 
 

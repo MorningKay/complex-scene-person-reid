@@ -20,6 +20,7 @@ from reid.evaluation import (
     DEFAULT_RERANK_NEIGHBOR_CHUNK_SIZE,
     DEFAULT_RERANK_QUERY_CHUNK_SIZE,
     RetrievalMetrics,
+    evaluate_clothes_changing_retrieval,
     evaluate_market_style_reranking,
     evaluate_market_style_retrieval,
 )
@@ -30,6 +31,8 @@ Config = dict[str, Any]
 DistanceName = Literal["cosine", "euclidean"]
 DEFAULT_QUERY_CHUNK_SIZE = 256
 _MARKET_STYLE_EVAL_DATASETS = {"market1501", "msmt17_v1"}
+_SPECIAL_EVAL_DATASETS = {"occluded_reid", "vc_clothes"}
+_SUPPORTED_EVAL_DATASETS = _MARKET_STYLE_EVAL_DATASETS | _SPECIAL_EVAL_DATASETS
 
 
 @dataclass(frozen=True)
@@ -194,10 +197,15 @@ def evaluate_model_on_reid_dataset(
 ) -> dict[str, Any]:
     configure_torch_multiprocessing_sharing()
     normalized_dataset_name = normalize_dataset_name(dataset_name)
-    if normalized_dataset_name not in _MARKET_STYLE_EVAL_DATASETS:
+    if normalized_dataset_name not in _SUPPORTED_EVAL_DATASETS:
+        valid = ", ".join(sorted(_SUPPORTED_EVAL_DATASETS))
+        raise ValueError(
+            f"Evaluation currently supports only these Re-ID datasets: {valid}; got {dataset_name!r}"
+        )
+    if rerank and normalized_dataset_name not in _MARKET_STYLE_EVAL_DATASETS:
         valid = ", ".join(sorted(_MARKET_STYLE_EVAL_DATASETS))
         raise ValueError(
-            f"Evaluation currently supports only Market-style datasets: {valid}; "
+            f"Re-ranking currently supports only Market-style datasets: {valid}; "
             f"got {dataset_name!r}"
         )
     if distance not in {"cosine", "euclidean"}:
@@ -263,6 +271,65 @@ def evaluate_model_on_reid_dataset(
         num_gallery=int(gallery.features.shape[0]),
         elapsed_seconds=time.time() - start_time,
     )
+    if normalized_dataset_name == "occluded_reid":
+        metrics.update(
+            {
+                "protocol": "occluded_to_whole",
+                "query": "occluded_body_images",
+                "gallery": "whole_body_images",
+            }
+        )
+        _log("protocol=occluded_to_whole", log_file)
+        return metrics
+
+    if normalized_dataset_name == "vc_clothes":
+        metrics["protocol"] = "standard"
+        query_clothes_ids = _extract_metadata_ints(
+            samples=query_loader.dataset.samples,
+            key="clothes_id",
+            dataset_name=normalized_dataset_name,
+            split="query",
+        )
+        gallery_clothes_ids = _extract_metadata_ints(
+            samples=gallery_loader.dataset.samples,
+            key="clothes_id",
+            dataset_name=normalized_dataset_name,
+            split="gallery",
+        )
+        clothes_changing_metrics = evaluate_clothes_changing_retrieval(
+            query_features=query.features,
+            gallery_features=gallery.features,
+            query_pids=query.pids,
+            gallery_pids=gallery.pids,
+            query_camids=query.camids,
+            gallery_camids=gallery.camids,
+            query_clothes_ids=query_clothes_ids,
+            gallery_clothes_ids=gallery_clothes_ids,
+            distance=distance,
+            max_rank=10,
+            query_chunk_size=query_chunk_size,
+            compute_device=resolved_device,
+        )
+        metrics["clothes_changing"] = _retrieval_metrics_to_dict(
+            clothes_changing_metrics,
+            dataset_name=normalized_dataset_name,
+            distance=distance,
+            query_chunk_size=query_chunk_size,
+            num_query=int(query.features.shape[0]),
+            num_gallery=int(gallery.features.shape[0]),
+            elapsed_seconds=time.time() - start_time,
+        )
+        metrics["clothes_changing"]["protocol"] = "clothes_changing"
+        _log("protocol=standard", log_file)
+        _log(
+            "clothes_changing rank1={rank1:.6f} rank5={rank5:.6f} "
+            "rank10={rank10:.6f} mAP={mAP:.6f} valid_queries={num_valid_queries}".format(
+                **metrics["clothes_changing"]
+            ),
+            log_file,
+        )
+        return metrics
+
     if not rerank:
         return metrics
 
@@ -356,6 +423,24 @@ def evaluate_model_on_market1501(
         query_chunk_size=query_chunk_size,
         log_file=log_file,
     )
+
+
+def _extract_metadata_ints(
+    samples: list[ReIDSample],
+    key: str,
+    dataset_name: str,
+    split: str,
+) -> torch.Tensor:
+    values: list[int] = []
+    for sample in samples:
+        value = sample.metadata.get(key)
+        if not isinstance(value, int):
+            raise ValueError(
+                f"{dataset_name} {split} sample is missing integer metadata {key!r}: "
+                f"{sample.path}"
+            )
+        values.append(value)
+    return torch.as_tensor(values, dtype=torch.long)
 
 
 def _limit_eval_samples(

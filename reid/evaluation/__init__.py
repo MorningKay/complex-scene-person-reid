@@ -3,6 +3,7 @@
 from reid.evaluation.distance import cosine_distance, pairwise_distance
 from reid.evaluation.metrics import (
     RetrievalMetrics,
+    evaluate_clothes_changing_retrieval,
     evaluate_market1501,
     evaluate_market_style_retrieval,
 )
@@ -23,6 +24,7 @@ __all__ = [
     "DEFAULT_RERANK_QUERY_CHUNK_SIZE",
     "RetrievalMetrics",
     "cosine_distance",
+    "evaluate_clothes_changing_retrieval",
     "evaluate_market1501",
     "evaluate_market_style_retrieval",
     "evaluate_market_style_reranking",

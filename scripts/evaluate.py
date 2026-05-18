@@ -28,7 +28,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--dataset-name",
         default="market1501",
-        help="Dataset name, e.g. market1501 or msmt17_v1.",
+        help="Dataset name, e.g. market1501, msmt17_v1, occluded_reid, or vc_clothes.",
     )
     parser.add_argument("--device", default=None, help="Override device, e.g. cpu or cuda.")
     parser.add_argument("--batch-size", type=int, default=64, help="Evaluation batch size.")
