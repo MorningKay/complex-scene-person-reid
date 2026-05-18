@@ -57,6 +57,32 @@ def make_smoke_config() -> dict:
     }
 
 
+def make_osnet_triplet_pk_config() -> dict:
+    config = make_smoke_config()
+    config["run"]["name"] = "pytest_osnet_triplet_pk"
+    config["data"]["image_size"] = [64, 32]
+    config["data"]["batch_size"] = 4
+    config["eval"] = {"enabled": False}
+    config["model"] = {
+        "name": "osnet_x1_0",
+        "num_classes": 751,
+        "feature_dim": 512,
+        "pretrained": False,
+    }
+    config["sampler"] = {
+        "name": "pk",
+        "num_pids": 2,
+        "num_instances": 2,
+    }
+    config["loss"]["triplet"] = {
+        "enabled": True,
+        "margin": 0.3,
+        "weight": 1.0,
+        "normalize_features": True,
+    }
+    return config
+
+
 def test_run_training_writes_smoke_artifacts(tmp_path: Path) -> None:
     if not DATA_ROOT.is_dir():
         pytest.skip(f"Market-1501 dataset not found at {DATA_ROOT}")
@@ -71,6 +97,9 @@ def test_run_training_writes_smoke_artifacts(tmp_path: Path) -> None:
 
     assert metrics["epoch"] == 1
     assert metrics["dataset_name"] == "market1501"
+    assert metrics["model_name"] == "resnet50"
+    assert metrics["model_pretrained"] is False
+    assert metrics["model_pretrained_path"] is None
     assert metrics["num_batches"] == 1
     assert metrics["num_samples"] == 2
     assert metrics["num_train_ids"] == 751
@@ -119,6 +148,9 @@ def test_run_training_writes_smoke_artifacts(tmp_path: Path) -> None:
 
     metrics = json.loads((output_dir / "metrics.json").read_text(encoding="utf-8"))
     assert metrics["dataset_name"] == "market1501"
+    assert metrics["model_name"] == "resnet50"
+    assert metrics["model_pretrained"] is False
+    assert metrics["model_pretrained_path"] is None
     assert metrics["num_train_ids"] == 751
     assert metrics["avg_ce_loss"] == pytest.approx(metrics["avg_train_loss"])
     assert metrics["avg_triplet_loss"] == pytest.approx(0.0)
@@ -141,7 +173,9 @@ def test_run_training_writes_smoke_artifacts(tmp_path: Path) -> None:
 
     train_log = (output_dir / "logs" / "train.txt").read_text(encoding="utf-8")
     assert "dataset_name=market1501" in train_log
+    assert "model_name=resnet50" in train_log
     assert "model_pretrained=False" in train_log
+    assert "model_pretrained_path=null" in train_log
     assert "random_erasing=False" in train_log
     assert "random_erasing_prob=0.500000" in train_log
     assert "sampler_name=shuffle" in train_log
@@ -158,7 +192,9 @@ def test_run_training_writes_smoke_artifacts(tmp_path: Path) -> None:
 
     run_summary = (output_dir / "run_summary.md").read_text(encoding="utf-8")
     assert "- dataset_name: market1501" in run_summary
+    assert "- model_name: resnet50" in run_summary
     assert "- model_pretrained: False" in run_summary
+    assert "- model_pretrained_path: null" in run_summary
     assert "- random_erasing: False" in run_summary
     assert "- random_erasing_prob: 0.500000" in run_summary
     assert "- sampler_name: shuffle" in run_summary
@@ -186,11 +222,48 @@ def test_validate_training_config_accepts_boolean_pretrained() -> None:
     validate_training_config(config)
 
 
+def test_validate_training_config_defaults_missing_model_name_to_resnet50() -> None:
+    config = make_smoke_config()
+    config["model"].pop("name", None)
+
+    validate_training_config(config)
+
+
 def test_validate_training_config_rejects_non_boolean_pretrained() -> None:
     config = make_smoke_config()
     config["model"]["pretrained"] = "true"
 
     with pytest.raises(ValueError, match="model.pretrained"):
+        validate_training_config(config)
+
+
+def test_validate_training_config_accepts_osnet_model_name() -> None:
+    config = make_osnet_triplet_pk_config()
+
+    validate_training_config(config)
+
+
+def test_validate_training_config_rejects_invalid_model_name() -> None:
+    config = make_smoke_config()
+    config["model"]["name"] = "mobilenet"
+
+    with pytest.raises(ValueError, match="model.name"):
+        validate_training_config(config)
+
+
+def test_validate_training_config_rejects_non_string_model_name() -> None:
+    config = make_smoke_config()
+    config["model"]["name"] = 123
+
+    with pytest.raises(ValueError, match="model.name"):
+        validate_training_config(config)
+
+
+def test_validate_training_config_rejects_non_string_pretrained_path() -> None:
+    config = make_smoke_config()
+    config["model"]["pretrained_path"] = 123
+
+    with pytest.raises(ValueError, match="model.pretrained_path"):
         validate_training_config(config)
 
 
@@ -282,6 +355,47 @@ def test_run_training_accepts_triplet_pk_sampler(tmp_path: Path) -> None:
     assert "- triplet_enabled: True" in run_summary
     assert "- triplet_margin: 0.300000" in run_summary
     assert "- triplet_weight: 1.000000" in run_summary
+
+
+def test_run_training_accepts_osnet_triplet_pk_sampler(tmp_path: Path) -> None:
+    if not DATA_ROOT.is_dir():
+        pytest.skip(f"Market-1501 dataset not found at {DATA_ROOT}")
+
+    output_dir = tmp_path / "osnet_triplet_pk"
+
+    metrics = run_training(
+        config=make_osnet_triplet_pk_config(),
+        output_dir=output_dir,
+        device="cpu",
+    )
+
+    assert metrics["model_name"] == "osnet_x1_0"
+    assert metrics["model_pretrained"] is False
+    assert metrics["model_pretrained_path"] is None
+    assert metrics["num_batches"] == 1
+    assert metrics["num_samples"] == 4
+    assert metrics["sampler_name"] == "pk"
+    assert metrics["triplet_enabled"] is True
+    assert metrics["avg_train_loss"] == pytest.approx(
+        metrics["avg_ce_loss"] + metrics["avg_triplet_loss"]
+    )
+
+    checkpoint = torch.load(output_dir / "ckpt" / "latest.pth", map_location="cpu")
+    assert checkpoint["config"]["model"]["name"] == "osnet_x1_0"
+    assert "conv1.conv.weight" in checkpoint["model"]
+    assert "classifier.weight" in checkpoint["model"]
+
+    train_log = (output_dir / "logs" / "train.txt").read_text(encoding="utf-8")
+    assert "model_name=osnet_x1_0" in train_log
+    assert "model_pretrained_path=null" in train_log
+    assert "sampler_name=pk" in train_log
+    assert "triplet_loss=" in train_log
+
+    run_summary = (output_dir / "run_summary.md").read_text(encoding="utf-8")
+    assert "- model_name: osnet_x1_0" in run_summary
+    assert "- model_pretrained_path: null" in run_summary
+    assert "- sampler_name: pk" in run_summary
+    assert "- triplet_enabled: True" in run_summary
 
 
 def test_run_training_accepts_msmt17_training_time_eval(tmp_path: Path) -> None:
@@ -635,6 +749,31 @@ def test_msmt17_triplet_pk_configs_match_ms2_recipe(
     assert config["loss"]["triplet"]["margin"] == pytest.approx(0.3)
     assert config["loss"]["triplet"]["weight"] == pytest.approx(1.0)
     assert config["loss"]["triplet"]["normalize_features"] is True
+    assert config["eval"]["enabled"] is True
+    assert config["eval"]["query_chunk_size"] == 256
+
+
+def test_msmt17_osnet_config_matches_ms3_recipe() -> None:
+    config = load_config("configs/osnet_x1_0_ce_triplet_pretrained_msmt17.yaml")
+
+    assert config["run"]["name"] == "osnet_x1_0_ce_triplet_pretrained_msmt17"
+    assert config["data"]["name"] == "msmt17_v1"
+    assert config["data"]["batch_size"] == 16
+    assert config["data"]["random_erasing"] is False
+    assert config["model"]["name"] == "osnet_x1_0"
+    assert config["model"]["num_classes"] == 1041
+    assert config["model"]["feature_dim"] == 512
+    assert config["model"]["pretrained"] is True
+    assert config["model"]["pretrained_path"] == "data/pretrained/osnet_x1_0_imagenet.pth"
+    assert config["sampler"]["name"] == "pk"
+    assert config["sampler"]["num_pids"] == 8
+    assert config["sampler"]["num_instances"] == 2
+    assert config["loss"]["label_smoothing"] == pytest.approx(0.0)
+    assert config["loss"]["triplet"]["enabled"] is True
+    assert config["loss"]["triplet"]["margin"] == pytest.approx(0.3)
+    assert config["loss"]["triplet"]["weight"] == pytest.approx(1.0)
+    assert config["loss"]["triplet"]["normalize_features"] is True
+    assert config["train"]["epochs"] == 20
     assert config["eval"]["enabled"] is True
     assert config["eval"]["query_chunk_size"] == 256
 

@@ -46,6 +46,19 @@ def make_smoke_config() -> dict:
     }
 
 
+def make_osnet_smoke_config() -> dict:
+    config = make_smoke_config()
+    config["run"]["name"] = "eval_osnet_pytest_smoke"
+    config["data"]["image_size"] = [64, 32]
+    config["model"] = {
+        "name": "osnet_x1_0",
+        "num_classes": 751,
+        "feature_dim": 512,
+        "pretrained": False,
+    }
+    return config
+
+
 def test_run_evaluation_writes_metrics_and_log(tmp_path: Path) -> None:
     if not DATA_ROOT.is_dir():
         pytest.skip(f"Market-1501 dataset not found at {DATA_ROOT}")
@@ -109,6 +122,38 @@ def test_run_evaluation_accepts_msmt17_dataset_name(tmp_path: Path) -> None:
 
     eval_log = (eval_dir / "logs" / "eval.txt").read_text(encoding="utf-8")
     assert "dataset_name=msmt17_v1" in eval_log
+    assert "query_chunk_size=2" in eval_log
+
+
+def test_run_evaluation_reloads_osnet_checkpoint(tmp_path: Path) -> None:
+    if not DATA_ROOT.is_dir():
+        pytest.skip(f"Market-1501 dataset not found at {DATA_ROOT}")
+
+    train_dir = tmp_path / "osnet_train"
+    eval_dir = tmp_path / "osnet_eval"
+    run_training(config=make_osnet_smoke_config(), output_dir=train_dir, device="cpu")
+
+    metrics = run_evaluation(
+        checkpoint_path=train_dir / "ckpt" / "best.pth",
+        data_root=DATA_ROOT,
+        output_dir=eval_dir,
+        device="cpu",
+        batch_size=4,
+        num_workers=0,
+        max_query=8,
+        max_gallery=32,
+        query_chunk_size=2,
+    )
+
+    assert metrics["dataset_name"] == "market1501"
+    assert metrics["query_chunk_size"] == 2
+    assert metrics["num_query"] == 8
+    assert metrics["num_gallery"] == 32
+    for key in ("rank1", "rank5", "rank10", "mAP"):
+        assert 0 <= metrics[key] <= 1
+
+    eval_log = (eval_dir / "logs" / "eval.txt").read_text(encoding="utf-8")
+    assert "dataset_name=market1501" in eval_log
     assert "query_chunk_size=2" in eval_log
 
 
