@@ -8,6 +8,8 @@ from reid.engine.train import run_training
 
 DATA_ROOT = Path("data/Market-1501-v15.09.15")
 MSMT17_ROOT = Path("data/MSMT17_V1")
+OCCLUDED_REID_ROOT = Path("data/Occluded_REID")
+VC_CLOTHES_ROOT = Path("data/VC-Clothes")
 
 
 def make_smoke_config() -> dict:
@@ -123,6 +125,112 @@ def test_run_evaluation_accepts_msmt17_dataset_name(tmp_path: Path) -> None:
     eval_log = (eval_dir / "logs" / "eval.txt").read_text(encoding="utf-8")
     assert "dataset_name=msmt17_v1" in eval_log
     assert "query_chunk_size=2" in eval_log
+
+
+def test_run_evaluation_accepts_occluded_reid_protocol(tmp_path: Path) -> None:
+    if not DATA_ROOT.is_dir():
+        pytest.skip(f"Market-1501 dataset not found at {DATA_ROOT}")
+    if not OCCLUDED_REID_ROOT.is_dir():
+        pytest.skip(f"Occluded_REID dataset not found at {OCCLUDED_REID_ROOT}")
+
+    train_dir = tmp_path / "train"
+    eval_dir = tmp_path / "eval_occluded"
+    run_training(config=make_smoke_config(), output_dir=train_dir, device="cpu")
+
+    metrics = run_evaluation(
+        checkpoint_path=train_dir / "ckpt" / "best.pth",
+        dataset_name="occluded_reid",
+        data_root=OCCLUDED_REID_ROOT,
+        output_dir=eval_dir,
+        device="cpu",
+        batch_size=4,
+        num_workers=0,
+        max_query=8,
+        max_gallery=32,
+        query_chunk_size=2,
+    )
+
+    assert metrics["dataset_name"] == "occluded_reid"
+    assert metrics["protocol"] == "occluded_to_whole"
+    assert metrics["query"] == "occluded_body_images"
+    assert metrics["gallery"] == "whole_body_images"
+    assert metrics["num_query"] == 8
+    assert metrics["num_gallery"] == 32
+    assert metrics["num_valid_queries"] > 0
+    for key in ("rank1", "rank5", "rank10", "mAP"):
+        assert 0 <= metrics[key] <= 1
+
+    eval_log = (eval_dir / "logs" / "eval.txt").read_text(encoding="utf-8")
+    assert "dataset_name=occluded_reid" in eval_log
+    assert "protocol=occluded_to_whole" in eval_log
+
+
+def test_run_evaluation_accepts_vc_clothes_protocol(tmp_path: Path) -> None:
+    if not DATA_ROOT.is_dir():
+        pytest.skip(f"Market-1501 dataset not found at {DATA_ROOT}")
+    if not VC_CLOTHES_ROOT.is_dir():
+        pytest.skip(f"VC-Clothes dataset not found at {VC_CLOTHES_ROOT}")
+
+    train_dir = tmp_path / "train"
+    eval_dir = tmp_path / "eval_vc"
+    run_training(config=make_smoke_config(), output_dir=train_dir, device="cpu")
+
+    metrics = run_evaluation(
+        checkpoint_path=train_dir / "ckpt" / "best.pth",
+        dataset_name="vc_clothes",
+        data_root=VC_CLOTHES_ROOT,
+        output_dir=eval_dir,
+        device="cpu",
+        batch_size=4,
+        num_workers=0,
+        max_query=16,
+        max_gallery=256,
+        query_chunk_size=2,
+    )
+
+    assert metrics["dataset_name"] == "vc_clothes"
+    assert metrics["protocol"] == "standard"
+    assert metrics["num_query"] == 16
+    assert metrics["num_gallery"] == 256
+    assert metrics["num_valid_queries"] > 0
+    assert metrics["clothes_changing"]["dataset_name"] == "vc_clothes"
+    assert metrics["clothes_changing"]["protocol"] == "clothes_changing"
+    assert metrics["clothes_changing"]["num_query"] == 16
+    assert metrics["clothes_changing"]["num_gallery"] == 256
+    assert metrics["clothes_changing"]["num_valid_queries"] > 0
+    for key in ("rank1", "rank5", "rank10", "mAP"):
+        assert 0 <= metrics[key] <= 1
+        assert 0 <= metrics["clothes_changing"][key] <= 1
+
+    eval_log = (eval_dir / "logs" / "eval.txt").read_text(encoding="utf-8")
+    assert "dataset_name=vc_clothes" in eval_log
+    assert "protocol=standard" in eval_log
+    assert "clothes_changing rank1=" in eval_log
+
+
+def test_run_evaluation_rejects_reranking_for_special_protocols(tmp_path: Path) -> None:
+    if not DATA_ROOT.is_dir():
+        pytest.skip(f"Market-1501 dataset not found at {DATA_ROOT}")
+    if not VC_CLOTHES_ROOT.is_dir():
+        pytest.skip(f"VC-Clothes dataset not found at {VC_CLOTHES_ROOT}")
+
+    train_dir = tmp_path / "train"
+    run_training(config=make_smoke_config(), output_dir=train_dir, device="cpu")
+
+    with pytest.raises(ValueError, match="Re-ranking"):
+        run_evaluation(
+            checkpoint_path=train_dir / "ckpt" / "best.pth",
+            dataset_name="vc_clothes",
+            data_root=VC_CLOTHES_ROOT,
+            output_dir=tmp_path / "eval_vc_rerank",
+            device="cpu",
+            batch_size=4,
+            num_workers=0,
+            max_query=4,
+            max_gallery=32,
+            query_chunk_size=2,
+            rerank=True,
+        )
 
 
 def test_run_evaluation_reloads_osnet_checkpoint(tmp_path: Path) -> None:

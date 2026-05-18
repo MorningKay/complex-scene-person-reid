@@ -4,6 +4,7 @@ import torch
 from reid.evaluation.distance import pairwise_distance
 from reid.evaluation.metrics import (
     RetrievalMetrics,
+    evaluate_clothes_changing_retrieval,
     evaluate_market1501,
     evaluate_market_style_retrieval,
 )
@@ -172,6 +173,72 @@ def test_evaluate_market_style_retrieval_rejects_invalid_chunk_size() -> None:
             query_camids=[0],
             gallery_camids=[1],
             query_chunk_size=0,
+        )
+
+
+def test_evaluate_clothes_changing_retrieval_filters_same_clothes_positive() -> None:
+    metrics = evaluate_clothes_changing_retrieval(
+        query_features=torch.tensor([[0.0, 0.0]]),
+        gallery_features=torch.tensor(
+            [
+                [0.0, 0.0],
+                [0.05, 0.0],
+                [0.1, 0.0],
+            ]
+        ),
+        query_pids=[1],
+        gallery_pids=[1, 2, 1],
+        query_camids=[0],
+        gallery_camids=[1, 1, 1],
+        query_clothes_ids=[3],
+        gallery_clothes_ids=[3, 9, 4],
+        distance="euclidean",
+        max_rank=3,
+        query_chunk_size=1,
+    )
+
+    torch.testing.assert_close(metrics.cmc, torch.tensor([0.0, 1.0, 1.0]))
+    assert metrics.mAP == pytest.approx(0.5)
+    assert metrics.num_valid_queries == 1
+
+
+def test_evaluate_clothes_changing_retrieval_skips_queries_without_changed_match() -> None:
+    metrics = evaluate_clothes_changing_retrieval(
+        query_features=torch.tensor([[0.0, 0.0], [10.0, 10.0]]),
+        gallery_features=torch.tensor(
+            [
+                [0.1, 0.0],
+                [10.1, 10.0],
+            ]
+        ),
+        query_pids=[1, 2],
+        gallery_pids=[1, 2],
+        query_camids=[0, 0],
+        gallery_camids=[1, 1],
+        query_clothes_ids=[5, 5],
+        gallery_clothes_ids=[5, 6],
+        distance="euclidean",
+        max_rank=2,
+        query_chunk_size=1,
+    )
+
+    torch.testing.assert_close(metrics.cmc, torch.tensor([1.0, 1.0]))
+    assert metrics.mAP == pytest.approx(1.0)
+    assert metrics.num_valid_queries == 1
+
+
+def test_evaluate_clothes_changing_retrieval_requires_changed_gallery_match() -> None:
+    with pytest.raises(ValueError, match="clothes-changing"):
+        evaluate_clothes_changing_retrieval(
+            query_features=torch.tensor([[0.0, 0.0]]),
+            gallery_features=torch.tensor([[0.1, 0.0]]),
+            query_pids=[1],
+            gallery_pids=[1],
+            query_camids=[0],
+            gallery_camids=[1],
+            query_clothes_ids=[5],
+            gallery_clothes_ids=[5],
+            query_chunk_size=1,
         )
 
 
