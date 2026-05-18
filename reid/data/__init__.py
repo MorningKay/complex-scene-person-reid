@@ -21,6 +21,7 @@ from reid.data.occluded_reid import (
     list_occluded_reid_split,
     parse_occluded_reid_filename,
 )
+from reid.data.samplers import PKBatchSampler
 from reid.data.transforms import build_eval_transform, build_train_transform
 from reid.data.vc_clothes import (
     VCClothesDataset,
@@ -33,6 +34,7 @@ __all__ = [
     "Market1501Sample",
     "MSMT17Dataset",
     "OccludedREIDDataset",
+    "PKBatchSampler",
     "ReIDSample",
     "SplitName",
     "VCClothesDataset",

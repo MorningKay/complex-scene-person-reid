@@ -12,6 +12,7 @@ from reid.data.common import SplitName
 from reid.data.market1501 import Market1501Dataset
 from reid.data.msmt17 import MSMT17Dataset
 from reid.data.occluded_reid import OccludedREIDDataset
+from reid.data.samplers import PKBatchSampler
 from reid.data.transforms import ImageSize, build_eval_transform, build_train_transform
 from reid.data.vc_clothes import VCClothesDataset
 
@@ -68,6 +69,10 @@ def build_reid_dataloader(
     num_workers: int = 0,
     pin_memory: bool = False,
     drop_last: bool = False,
+    sampler_name: str | None = None,
+    sampler_num_pids: int | None = None,
+    sampler_num_instances: int | None = None,
+    sampler_batches_per_epoch: int | None = None,
 ) -> DataLoader:
     transform = (
         build_train_transform(
@@ -79,6 +84,35 @@ def build_reid_dataloader(
         else build_eval_transform(image_size=image_size)
     )
     dataset = build_reid_dataset(name=name, root=root, split=split, transform=transform)
+
+    if sampler_name is not None:
+        normalized_sampler_name = sampler_name.lower().replace("-", "_")
+        if normalized_sampler_name != "pk":
+            raise ValueError("sampler_name must be one of: pk")
+        if split != "train":
+            raise ValueError("PK sampler is only supported for the train split")
+        if sampler_num_pids is None:
+            raise ValueError("sampler_num_pids is required when sampler_name='pk'")
+        if sampler_num_instances is None:
+            raise ValueError("sampler_num_instances is required when sampler_name='pk'")
+        expected_batch_size = sampler_num_pids * sampler_num_instances
+        if batch_size != expected_batch_size:
+            raise ValueError(
+                "data.batch_size must equal sampler_num_pids * sampler_num_instances "
+                f"for PK sampler, got {batch_size} and {expected_batch_size}"
+            )
+        return DataLoader(
+            dataset,
+            batch_sampler=PKBatchSampler(
+                samples=dataset.samples,
+                num_pids=sampler_num_pids,
+                num_instances=sampler_num_instances,
+                batches_per_epoch=sampler_batches_per_epoch,
+            ),
+            num_workers=num_workers,
+            pin_memory=pin_memory,
+            collate_fn=reid_collate,
+        )
 
     if shuffle is None:
         shuffle = split == "train"
@@ -126,6 +160,10 @@ def build_market1501_dataloader(
     num_workers: int = 0,
     pin_memory: bool = False,
     drop_last: bool = False,
+    sampler_name: str | None = None,
+    sampler_num_pids: int | None = None,
+    sampler_num_instances: int | None = None,
+    sampler_batches_per_epoch: int | None = None,
 ) -> DataLoader:
     return build_reid_dataloader(
         name="market1501",
@@ -139,4 +177,8 @@ def build_market1501_dataloader(
         num_workers=num_workers,
         pin_memory=pin_memory,
         drop_last=drop_last,
+        sampler_name=sampler_name,
+        sampler_num_pids=sampler_num_pids,
+        sampler_num_instances=sampler_num_instances,
+        sampler_batches_per_epoch=sampler_batches_per_epoch,
     )
