@@ -9,6 +9,7 @@ from reid.utils import load_config, validate_training_config
 
 DATA_ROOT = Path("data/Market-1501-v15.09.15")
 MSMT17_ROOT = Path("data/MSMT17_V1")
+VC_CLOTHES_ROOT = Path("data/VC-Clothes")
 
 
 def make_smoke_config() -> dict:
@@ -432,6 +433,56 @@ def test_run_training_accepts_msmt17_training_time_eval(tmp_path: Path) -> None:
     assert "mAP=" in train_log
 
 
+def test_run_training_accepts_vc_clothes_training_time_eval(tmp_path: Path) -> None:
+    if not VC_CLOTHES_ROOT.is_dir():
+        pytest.skip(f"VC-Clothes dataset not found at {VC_CLOTHES_ROOT}")
+
+    config = make_smoke_config()
+    config["run"]["name"] = "pytest_vc_clothes_eval_smoke"
+    config["data"]["name"] = "vc_clothes"
+    config["data"]["root"] = str(VC_CLOTHES_ROOT)
+    config["model"]["num_classes"] = 256
+    config["eval"]["max_query"] = 16
+    config["eval"]["max_gallery"] = 256
+    config["eval"]["query_chunk_size"] = 2
+    output_dir = tmp_path / "vc_clothes_eval_run"
+
+    metrics = run_training(config=config, output_dir=output_dir, device="cpu")
+
+    assert metrics["dataset_name"] == "vc_clothes"
+    assert metrics["num_train_ids"] == 256
+    assert metrics["best_metric_name"] == "mAP"
+    assert metrics["best_mAP"] is not None
+    assert metrics["final_clothes_changing_mAP"] is not None
+    assert metrics["final_clothes_changing_rank1"] is not None
+    assert metrics["best_clothes_changing_mAP"] is not None
+    assert metrics["best_clothes_changing_rank1"] is not None
+    assert metrics["history"][0]["eval"]["dataset_name"] == "vc_clothes"
+    assert metrics["history"][0]["eval"]["protocol"] == "standard"
+    assert metrics["history"][0]["eval"]["query_chunk_size"] == 2
+    assert metrics["history"][0]["eval"]["num_query"] == 16
+    assert metrics["history"][0]["eval"]["num_gallery"] == 256
+    assert metrics["history"][0]["eval"]["clothes_changing"]["protocol"] == "clothes_changing"
+    assert metrics["history"][0]["eval"]["clothes_changing"]["num_valid_queries"] > 0
+
+    checkpoint = torch.load(output_dir / "ckpt" / "best.pth", map_location="cpu")
+    assert checkpoint["metrics"]["eval"]["dataset_name"] == "vc_clothes"
+    assert "clothes_changing" in checkpoint["metrics"]["eval"]
+
+    metrics_json = json.loads((output_dir / "metrics.json").read_text(encoding="utf-8"))
+    assert metrics_json["final_clothes_changing_mAP"] is not None
+    assert metrics_json["best_clothes_changing_mAP"] is not None
+
+    train_log = (output_dir / "logs" / "train.txt").read_text(encoding="utf-8")
+    assert "dataset_name=vc_clothes" in train_log
+    assert "clothes_changing_mAP=" in train_log
+
+    run_summary = (output_dir / "run_summary.md").read_text(encoding="utf-8")
+    assert "- dataset_name: vc_clothes" in run_summary
+    assert "- final_clothes_changing_mAP:" in run_summary
+    assert "- best_clothes_changing_mAP:" in run_summary
+
+
 def test_run_training_applies_cosine_scheduler(tmp_path: Path) -> None:
     if not DATA_ROOT.is_dir():
         pytest.skip(f"Market-1501 dataset not found at {DATA_ROOT}")
@@ -769,6 +820,49 @@ def test_msmt17_osnet_config_matches_ms3_recipe() -> None:
     assert config["sampler"]["num_pids"] == 8
     assert config["sampler"]["num_instances"] == 2
     assert config["loss"]["label_smoothing"] == pytest.approx(0.0)
+    assert config["loss"]["triplet"]["enabled"] is True
+    assert config["loss"]["triplet"]["margin"] == pytest.approx(0.3)
+    assert config["loss"]["triplet"]["weight"] == pytest.approx(1.0)
+    assert config["loss"]["triplet"]["normalize_features"] is True
+    assert config["train"]["epochs"] == 20
+    assert config["eval"]["enabled"] is True
+    assert config["eval"]["query_chunk_size"] == 256
+
+
+def test_vc_clothes_resnet_config_matches_base_recipe() -> None:
+    config = load_config("configs/resnet50_ce_pretrained_vc_clothes.yaml")
+
+    assert config["run"]["name"] == "resnet50_ce_pretrained_vc_clothes"
+    assert config["data"]["name"] == "vc_clothes"
+    assert config["data"]["root"] == "data/VC-Clothes"
+    assert config["data"]["batch_size"] == 16
+    assert config["data"]["random_erasing"] is False
+    assert config["model"]["num_classes"] == 256
+    assert config["model"]["feature_dim"] == 2048
+    assert config["model"]["pretrained"] is True
+    assert config["loss"]["label_smoothing"] == pytest.approx(0.0)
+    assert "triplet" not in config["loss"]
+    assert config["train"]["epochs"] == 20
+    assert config["eval"]["enabled"] is True
+    assert config["eval"]["query_chunk_size"] == 256
+
+
+def test_vc_clothes_osnet_config_matches_final_recipe() -> None:
+    config = load_config("configs/osnet_x1_0_ce_triplet_pretrained_vc_clothes.yaml")
+
+    assert config["run"]["name"] == "osnet_x1_0_ce_triplet_pretrained_vc_clothes"
+    assert config["data"]["name"] == "vc_clothes"
+    assert config["data"]["root"] == "data/VC-Clothes"
+    assert config["data"]["batch_size"] == 16
+    assert config["data"]["random_erasing"] is False
+    assert config["model"]["name"] == "osnet_x1_0"
+    assert config["model"]["num_classes"] == 256
+    assert config["model"]["feature_dim"] == 512
+    assert config["model"]["pretrained"] is True
+    assert config["model"]["pretrained_path"] == "data/pretrained/osnet_x1_0_imagenet.pth"
+    assert config["sampler"]["name"] == "pk"
+    assert config["sampler"]["num_pids"] == 8
+    assert config["sampler"]["num_instances"] == 2
     assert config["loss"]["triplet"]["enabled"] is True
     assert config["loss"]["triplet"]["margin"] == pytest.approx(0.3)
     assert config["loss"]["triplet"]["weight"] == pytest.approx(1.0)
