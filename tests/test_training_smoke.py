@@ -76,12 +76,20 @@ def test_run_training_writes_smoke_artifacts(tmp_path: Path) -> None:
     assert metrics["num_train_ids"] == 751
     assert metrics["avg_train_loss"] > 0
     assert metrics["avg_ce_loss"] == pytest.approx(metrics["avg_train_loss"])
+    assert metrics["avg_triplet_loss"] == pytest.approx(0.0)
     assert 0 <= metrics["train_id_acc"] <= 1
     assert metrics["lr"] == pytest.approx(0.0003)
     assert metrics["scheduler_name"] == "constant"
     assert metrics["scheduler_state"]["name"] == "constant"
     assert metrics["random_erasing"] is False
     assert metrics["random_erasing_prob"] == pytest.approx(0.5)
+    assert metrics["sampler_name"] == "shuffle"
+    assert metrics["sampler_num_pids"] is None
+    assert metrics["sampler_num_instances"] is None
+    assert metrics["triplet_enabled"] is False
+    assert metrics["triplet_margin"] is None
+    assert metrics["triplet_weight"] == pytest.approx(0.0)
+    assert metrics["triplet_normalize_features"] is False
     assert metrics["amp_enabled"] is False
     assert metrics["grad_clip_norm"] is None
 
@@ -100,6 +108,7 @@ def test_run_training_writes_smoke_artifacts(tmp_path: Path) -> None:
     assert checkpoint["history"][0]["epoch"] == 1
     assert checkpoint["metrics"]["num_batches"] == 1
     assert "avg_ce_loss" in checkpoint["metrics"]
+    assert "avg_triplet_loss" in checkpoint["metrics"]
     assert "train_id_acc" in checkpoint["metrics"]
     assert "lr" in checkpoint["metrics"]
     assert "eval" in checkpoint["metrics"]
@@ -112,6 +121,7 @@ def test_run_training_writes_smoke_artifacts(tmp_path: Path) -> None:
     assert metrics["dataset_name"] == "market1501"
     assert metrics["num_train_ids"] == 751
     assert metrics["avg_ce_loss"] == pytest.approx(metrics["avg_train_loss"])
+    assert metrics["avg_triplet_loss"] == pytest.approx(0.0)
     assert 0 <= metrics["train_id_acc"] <= 1
     assert metrics["best_metric_name"] == "mAP"
     assert 0 <= metrics["best_mAP"] <= 1
@@ -123,6 +133,9 @@ def test_run_training_writes_smoke_artifacts(tmp_path: Path) -> None:
     assert metrics["scheduler_name"] == "constant"
     assert metrics["random_erasing"] is False
     assert metrics["random_erasing_prob"] == pytest.approx(0.5)
+    assert metrics["sampler_name"] == "shuffle"
+    assert metrics["triplet_enabled"] is False
+    assert metrics["history"][0]["avg_triplet_loss"] == pytest.approx(0.0)
     assert metrics["amp_enabled"] is False
     assert metrics["grad_clip_norm"] is None
 
@@ -131,6 +144,9 @@ def test_run_training_writes_smoke_artifacts(tmp_path: Path) -> None:
     assert "model_pretrained=False" in train_log
     assert "random_erasing=False" in train_log
     assert "random_erasing_prob=0.500000" in train_log
+    assert "sampler_name=shuffle" in train_log
+    assert "triplet_enabled=False" in train_log
+    assert "triplet_loss=" in train_log
     assert "scheduler_name=constant" in train_log
     assert "amp_enabled=False" in train_log
     assert "grad_clip_norm=null" in train_log
@@ -145,11 +161,14 @@ def test_run_training_writes_smoke_artifacts(tmp_path: Path) -> None:
     assert "- model_pretrained: False" in run_summary
     assert "- random_erasing: False" in run_summary
     assert "- random_erasing_prob: 0.500000" in run_summary
+    assert "- sampler_name: shuffle" in run_summary
+    assert "- triplet_enabled: False" in run_summary
     assert "- scheduler_name: constant" in run_summary
     assert "- amp_enabled: False" in run_summary
     assert "- grad_clip_norm: null" in run_summary
     assert "- num_train_ids: 751" in run_summary
     assert "- final_avg_ce_loss:" in run_summary
+    assert "- final_avg_triplet_loss:" in run_summary
     assert "- final_train_id_acc:" in run_summary
     assert "- best_metric_name: mAP" in run_summary
     assert "- best_mAP:" in run_summary
@@ -202,11 +221,67 @@ def test_run_training_accepts_msmt17_dataset_name(tmp_path: Path) -> None:
     assert metrics["num_batches"] == 1
     assert metrics["num_samples"] == 2
     assert metrics["avg_ce_loss"] == pytest.approx(metrics["avg_train_loss"])
+    assert metrics["avg_triplet_loss"] == pytest.approx(0.0)
 
     train_log = (output_dir / "logs" / "train.txt").read_text(encoding="utf-8")
     assert "dataset_name=msmt17_v1" in train_log
     assert "ce_loss=" in train_log
     assert "id_acc=" in train_log
+
+
+def test_run_training_accepts_triplet_pk_sampler(tmp_path: Path) -> None:
+    if not DATA_ROOT.is_dir():
+        pytest.skip(f"Market-1501 dataset not found at {DATA_ROOT}")
+
+    config = make_smoke_config()
+    config["eval"] = {"enabled": False}
+    config["data"]["batch_size"] = 4
+    config["sampler"] = {
+        "name": "pk",
+        "num_pids": 2,
+        "num_instances": 2,
+    }
+    config["loss"]["triplet"] = {
+        "enabled": True,
+        "margin": 0.3,
+        "weight": 1.0,
+        "normalize_features": True,
+    }
+    output_dir = tmp_path / "triplet_pk"
+
+    metrics = run_training(config=config, output_dir=output_dir, device="cpu")
+
+    assert metrics["num_batches"] == 1
+    assert metrics["num_samples"] == 4
+    assert metrics["sampler_name"] == "pk"
+    assert metrics["sampler_num_pids"] == 2
+    assert metrics["sampler_num_instances"] == 2
+    assert metrics["triplet_enabled"] is True
+    assert metrics["triplet_margin"] == pytest.approx(0.3)
+    assert metrics["triplet_weight"] == pytest.approx(1.0)
+    assert metrics["triplet_normalize_features"] is True
+    assert metrics["avg_triplet_loss"] >= 0
+    assert metrics["avg_train_loss"] == pytest.approx(
+        metrics["avg_ce_loss"] + metrics["avg_triplet_loss"]
+    )
+    assert metrics["history"][0]["avg_triplet_loss"] == pytest.approx(
+        metrics["avg_triplet_loss"]
+    )
+
+    train_log = (output_dir / "logs" / "train.txt").read_text(encoding="utf-8")
+    assert "sampler_name=pk" in train_log
+    assert "sampler_num_pids=2" in train_log
+    assert "sampler_num_instances=2" in train_log
+    assert "triplet_enabled=True" in train_log
+    assert "triplet_loss=" in train_log
+
+    run_summary = (output_dir / "run_summary.md").read_text(encoding="utf-8")
+    assert "- sampler_name: pk" in run_summary
+    assert "- sampler_num_pids: 2" in run_summary
+    assert "- sampler_num_instances: 2" in run_summary
+    assert "- triplet_enabled: True" in run_summary
+    assert "- triplet_margin: 0.300000" in run_summary
+    assert "- triplet_weight: 1.000000" in run_summary
 
 
 def test_run_training_accepts_msmt17_training_time_eval(tmp_path: Path) -> None:
@@ -440,6 +515,76 @@ def test_validate_training_config_rejects_invalid_random_erasing_controls(
         validate_training_config(config)
 
 
+@pytest.mark.parametrize(
+    ("sampler_config", "message"),
+    [
+        ("pk", "sampler"),
+        ({"name": "random"}, "sampler.name"),
+        ({"name": "pk", "num_instances": 2}, "sampler.num_pids"),
+        ({"name": "pk", "num_pids": 0, "num_instances": 2}, "sampler.num_pids"),
+        ({"name": "pk", "num_pids": 2, "num_instances": 0}, "sampler.num_instances"),
+        (
+            {"name": "pk", "num_pids": 2, "num_instances": 2, "batches_per_epoch": 0},
+            "sampler.batches_per_epoch",
+        ),
+    ],
+)
+def test_validate_training_config_rejects_invalid_sampler_config(
+    sampler_config: object,
+    message: str,
+) -> None:
+    config = make_smoke_config()
+    config["data"]["batch_size"] = 4
+    config["sampler"] = sampler_config
+
+    with pytest.raises(ValueError, match=message):
+        validate_training_config(config)
+
+
+def test_validate_training_config_rejects_pk_batch_size_mismatch() -> None:
+    config = make_smoke_config()
+    config["data"]["batch_size"] = 3
+    config["sampler"] = {"name": "pk", "num_pids": 2, "num_instances": 2}
+
+    with pytest.raises(ValueError, match="data.batch_size"):
+        validate_training_config(config)
+
+
+@pytest.mark.parametrize(
+    ("triplet_config", "message"),
+    [
+        ("enabled", "loss.triplet"),
+        ({}, "loss.triplet.enabled"),
+        ({"enabled": "true"}, "loss.triplet.enabled"),
+        (
+            {"enabled": True, "weight": 1.0, "normalize_features": True},
+            "loss.triplet.margin",
+        ),
+        (
+            {"enabled": True, "margin": 0.0, "weight": 1.0, "normalize_features": True},
+            "loss.triplet.margin",
+        ),
+        (
+            {"enabled": True, "margin": 0.3, "weight": 0.0, "normalize_features": True},
+            "loss.triplet.weight",
+        ),
+        (
+            {"enabled": True, "margin": 0.3, "weight": 1.0, "normalize_features": "yes"},
+            "loss.triplet.normalize_features",
+        ),
+    ],
+)
+def test_validate_training_config_rejects_invalid_triplet_config(
+    triplet_config: object,
+    message: str,
+) -> None:
+    config = make_smoke_config()
+    config["loss"]["triplet"] = triplet_config
+
+    with pytest.raises(ValueError, match=message):
+        validate_training_config(config)
+
+
 def test_msmt17_random_erasing_config_matches_ms1_recipe() -> None:
     config = load_config("configs/resnet50_ce_pretrained_msmt17_random_erasing.yaml")
 
@@ -449,6 +594,47 @@ def test_msmt17_random_erasing_config_matches_ms1_recipe() -> None:
     assert config["data"]["random_erasing_prob"] == pytest.approx(0.5)
     assert config["model"]["pretrained"] is True
     assert config["loss"]["label_smoothing"] == pytest.approx(0.0)
+    assert config["eval"]["enabled"] is True
+    assert config["eval"]["query_chunk_size"] == 256
+
+
+@pytest.mark.parametrize(
+    ("path", "run_name", "random_erasing"),
+    [
+        (
+            "configs/resnet50_ce_triplet_pretrained_msmt17.yaml",
+            "resnet50_ce_triplet_pretrained_msmt17",
+            False,
+        ),
+        (
+            "configs/resnet50_ce_triplet_pretrained_msmt17_random_erasing.yaml",
+            "resnet50_ce_triplet_pretrained_msmt17_random_erasing",
+            True,
+        ),
+    ],
+)
+def test_msmt17_triplet_pk_configs_match_ms2_recipe(
+    path: str,
+    run_name: str,
+    random_erasing: bool,
+) -> None:
+    config = load_config(path)
+
+    assert config["run"]["name"] == run_name
+    assert config["data"]["name"] == "msmt17_v1"
+    assert config["data"]["batch_size"] == 16
+    assert config["data"]["random_erasing"] is random_erasing
+    if random_erasing:
+        assert config["data"]["random_erasing_prob"] == pytest.approx(0.5)
+    assert config["model"]["pretrained"] is True
+    assert config["sampler"]["name"] == "pk"
+    assert config["sampler"]["num_pids"] == 8
+    assert config["sampler"]["num_instances"] == 2
+    assert config["loss"]["label_smoothing"] == pytest.approx(0.0)
+    assert config["loss"]["triplet"]["enabled"] is True
+    assert config["loss"]["triplet"]["margin"] == pytest.approx(0.3)
+    assert config["loss"]["triplet"]["weight"] == pytest.approx(1.0)
+    assert config["loss"]["triplet"]["normalize_features"] is True
     assert config["eval"]["enabled"] is True
     assert config["eval"]["query_chunk_size"] == 256
 
