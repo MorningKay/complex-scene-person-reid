@@ -1,0 +1,51 @@
+run:
+  name: osnet_x1_0_ce_triplet_pretrained_market1501
+  seed: 42
+  smoke: false
+data:
+  name: market1501
+  root: data/Market-1501-v15.09.15
+  image_size: [256, 128]
+  batch_size: 16
+  num_workers: 4
+  random_erasing: false
+  pin_memory: true
+  drop_last: false
+sampler:
+  name: pk
+  num_pids: 8
+  num_instances: 2
+model:
+  name: osnet_x1_0
+  num_classes: 751
+  feature_dim: 512
+  pretrained: true
+  pretrained_path: data/pretrained/osnet_x1_0_imagenet.pth
+loss:
+  label_smoothing: 0.0
+  triplet:
+    enabled: true
+    margin: 0.3
+    weight: 1.0
+    normalize_features: true
+optimizer:
+  lr: 0.0003
+  weight_decay: 0.0005
+scheduler:
+  name: cosine
+  min_lr: 0.000001
+  warmup_epochs: 2
+  warmup_factor: 0.1
+train:
+  epochs: 20
+  max_batches:
+  log_interval: 20
+  amp: true
+  grad_clip_norm:
+eval:
+  enabled: true
+  interval: 1
+  batch_size: 128
+  num_workers: 4
+  distance: cosine
+  query_chunk_size: 256
