@@ -829,6 +829,58 @@ def test_msmt17_osnet_config_matches_ms3_recipe() -> None:
     assert config["eval"]["query_chunk_size"] == 256
 
 
+def test_market1501_osnet_config_matches_m1_recipe() -> None:
+    config = load_config("configs/osnet_x1_0_ce_triplet_pretrained_market1501.yaml")
+
+    assert config["run"]["name"] == "osnet_x1_0_ce_triplet_pretrained_market1501"
+    assert config["data"]["name"] == "market1501"
+    assert config["data"]["root"] == "data/Market-1501-v15.09.15"
+    assert config["data"]["batch_size"] == 16
+    assert config["data"]["random_erasing"] is False
+    assert config["model"]["name"] == "osnet_x1_0"
+    assert config["model"]["num_classes"] == 751
+    assert config["model"]["feature_dim"] == 512
+    assert config["model"]["pretrained"] is True
+    assert config["model"]["pretrained_path"] == "data/pretrained/osnet_x1_0_imagenet.pth"
+    assert config["sampler"]["name"] == "pk"
+    assert config["sampler"]["num_pids"] == 8
+    assert config["sampler"]["num_instances"] == 2
+    assert config["loss"]["label_smoothing"] == pytest.approx(0.0)
+    assert config["loss"]["triplet"]["enabled"] is True
+    assert config["loss"]["triplet"]["margin"] == pytest.approx(0.3)
+    assert config["loss"]["triplet"]["weight"] == pytest.approx(1.0)
+    assert config["loss"]["triplet"]["normalize_features"] is True
+    assert config["train"]["epochs"] == 20
+    assert config["eval"]["enabled"] is True
+    assert config["eval"]["query_chunk_size"] == 256
+
+
+def test_msmt17_osnet_40_epoch_config_matches_long_run_recipe() -> None:
+    config = load_config("configs/osnet_x1_0_ce_triplet_pretrained_msmt17_40ep.yaml")
+
+    assert config["run"]["name"] == "osnet_x1_0_ce_triplet_pretrained_msmt17_40ep"
+    assert config["data"]["name"] == "msmt17_v1"
+    assert config["data"]["root"] == "data/MSMT17_V1"
+    assert config["data"]["batch_size"] == 16
+    assert config["data"]["random_erasing"] is False
+    assert config["model"]["name"] == "osnet_x1_0"
+    assert config["model"]["num_classes"] == 1041
+    assert config["model"]["feature_dim"] == 512
+    assert config["model"]["pretrained"] is True
+    assert config["model"]["pretrained_path"] == "data/pretrained/osnet_x1_0_imagenet.pth"
+    assert config["sampler"]["name"] == "pk"
+    assert config["sampler"]["num_pids"] == 8
+    assert config["sampler"]["num_instances"] == 2
+    assert config["loss"]["label_smoothing"] == pytest.approx(0.0)
+    assert config["loss"]["triplet"]["enabled"] is True
+    assert config["loss"]["triplet"]["margin"] == pytest.approx(0.3)
+    assert config["loss"]["triplet"]["weight"] == pytest.approx(1.0)
+    assert config["loss"]["triplet"]["normalize_features"] is True
+    assert config["train"]["epochs"] == 40
+    assert config["eval"]["enabled"] is True
+    assert config["eval"]["query_chunk_size"] == 256
+
+
 def test_vc_clothes_resnet_config_matches_base_recipe() -> None:
     config = load_config("configs/resnet50_ce_pretrained_vc_clothes.yaml")
 
