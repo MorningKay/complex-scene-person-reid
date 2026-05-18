@@ -157,6 +157,91 @@ def test_run_evaluation_reloads_osnet_checkpoint(tmp_path: Path) -> None:
     assert "query_chunk_size=2" in eval_log
 
 
+def test_run_evaluation_writes_reranking_metrics(tmp_path: Path) -> None:
+    if not DATA_ROOT.is_dir():
+        pytest.skip(f"Market-1501 dataset not found at {DATA_ROOT}")
+
+    train_dir = tmp_path / "train_rerank"
+    eval_dir = tmp_path / "eval_rerank"
+    run_training(config=make_smoke_config(), output_dir=train_dir, device="cpu")
+
+    metrics = run_evaluation(
+        checkpoint_path=train_dir / "ckpt" / "best.pth",
+        data_root=DATA_ROOT,
+        output_dir=eval_dir,
+        device="cpu",
+        batch_size=4,
+        num_workers=0,
+        max_query=4,
+        max_gallery=16,
+        query_chunk_size=2,
+        rerank=True,
+        rerank_k1=3,
+        rerank_k2=2,
+        rerank_lambda=0.3,
+        rerank_neighbor_chunk_size=4,
+        rerank_query_chunk_size=2,
+    )
+
+    assert metrics["rerank_enabled"] is True
+    assert metrics["rerank_k1"] == 3
+    assert metrics["rerank_k2"] == 2
+    assert metrics["rerank_lambda"] == pytest.approx(0.3)
+    assert metrics["rerank_neighbor_chunk_size"] == 4
+    assert metrics["rerank_query_chunk_size"] == 2
+    assert metrics["pre_rerank"]["dataset_name"] == "market1501"
+    assert metrics["pre_rerank"]["num_query"] == 4
+    assert metrics["pre_rerank"]["num_gallery"] == 16
+    for key in ("rank1", "rank5", "rank10", "mAP"):
+        assert 0 <= metrics[key] <= 1
+        assert 0 <= metrics["pre_rerank"][key] <= 1
+
+    eval_log = (eval_dir / "logs" / "eval.txt").read_text(encoding="utf-8")
+    assert "rerank=True" in eval_log
+    assert "rerank_k1=3" in eval_log
+    assert "rerank_query_chunk_size=2" in eval_log
+
+
+def test_run_evaluation_accepts_msmt17_reranking_smoke(tmp_path: Path) -> None:
+    if not DATA_ROOT.is_dir():
+        pytest.skip(f"Market-1501 dataset not found at {DATA_ROOT}")
+    if not MSMT17_ROOT.is_dir():
+        pytest.skip(f"MSMT17_V1 dataset not found at {MSMT17_ROOT}")
+
+    train_dir = tmp_path / "train_msmt17_rerank"
+    eval_dir = tmp_path / "eval_msmt17_rerank"
+    run_training(config=make_smoke_config(), output_dir=train_dir, device="cpu")
+
+    metrics = run_evaluation(
+        checkpoint_path=train_dir / "ckpt" / "best.pth",
+        dataset_name="msmt17_v1",
+        data_root=MSMT17_ROOT,
+        output_dir=eval_dir,
+        device="cpu",
+        batch_size=4,
+        num_workers=0,
+        max_query=4,
+        max_gallery=24,
+        query_chunk_size=2,
+        rerank=True,
+        rerank_k1=3,
+        rerank_k2=2,
+        rerank_lambda=0.3,
+        rerank_neighbor_chunk_size=4,
+        rerank_query_chunk_size=2,
+    )
+
+    assert metrics["dataset_name"] == "msmt17_v1"
+    assert metrics["rerank_enabled"] is True
+    assert metrics["pre_rerank"]["dataset_name"] == "msmt17_v1"
+    assert metrics["num_query"] == 4
+    assert metrics["num_gallery"] == 24
+    assert metrics["pre_rerank"]["num_query"] == 4
+    assert metrics["pre_rerank"]["num_gallery"] == 24
+    for key in ("rank1", "rank5", "rank10", "mAP"):
+        assert 0 <= metrics[key] <= 1
+
+
 @pytest.mark.parametrize(
     "checkpoint",
     [
