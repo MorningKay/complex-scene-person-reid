@@ -1,4 +1,4 @@
-"""Minimal CE-only training engine."""
+"""Training engine for Re-ID baselines."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from torch.optim import Optimizer
 
 from reid.data import build_reid_dataloader, normalize_dataset_name
 from reid.engine.evaluate import DEFAULT_QUERY_CHUNK_SIZE, evaluate_model_on_reid_dataset
-from reid.losses import build_classification_loss
+from reid.losses import BatchHardTripletLoss, build_classification_loss
 from reid.models import resnet50_reid
 from reid.utils import (
     configure_torch_multiprocessing_sharing,
@@ -43,10 +43,13 @@ def train_one_epoch(
     amp_enabled: bool = False,
     scaler: torch.amp.GradScaler | None = None,
     grad_clip_norm: float | None = None,
+    triplet_criterion: nn.Module | None = None,
+    triplet_weight: float = 0.0,
 ) -> dict[str, float | int]:
     model.train()
     total_loss = 0.0
     total_ce_loss = 0.0
+    total_triplet_loss = 0.0
     total_samples = 0
     total_correct = 0
     num_batches = 0
@@ -60,9 +63,14 @@ def train_one_epoch(
 
         optimizer.zero_grad(set_to_none=True)
         with torch.amp.autocast(device_type=device.type, enabled=amp_enabled):
-            logits, _features = model(images)
+            logits, features = model(images)
             ce_loss = criterion(logits, labels)
-            loss = ce_loss
+        if triplet_criterion is None:
+            triplet_loss = ce_loss.new_zeros(())
+        else:
+            with torch.amp.autocast(device_type=device.type, enabled=False):
+                triplet_loss = triplet_criterion(features.float(), labels)
+        loss = ce_loss + triplet_weight * triplet_loss
         if amp_enabled:
             if scaler is None:
                 raise ValueError("AMP training requires a GradScaler")
@@ -81,11 +89,13 @@ def train_one_epoch(
         batch_size = images.shape[0]
         loss_value = float(loss.detach().cpu())
         ce_loss_value = float(ce_loss.detach().cpu())
+        triplet_loss_value = float(triplet_loss.detach().cpu())
         batch_correct = int(logits.detach().argmax(dim=1).eq(labels).sum().cpu())
         batch_id_acc = batch_correct / batch_size
         lr = _current_lr(optimizer)
         total_loss += loss_value * batch_size
         total_ce_loss += ce_loss_value * batch_size
+        total_triplet_loss += triplet_loss_value * batch_size
         total_samples += batch_size
         total_correct += batch_correct
         num_batches += 1
@@ -94,7 +104,7 @@ def train_one_epoch(
             _log(
                 f"epoch={epoch} batch={batch_index} lr={lr:.8f} "
                 f"loss={loss_value:.6f} ce_loss={ce_loss_value:.6f} "
-                f"id_acc={batch_id_acc:.6f}",
+                f"triplet_loss={triplet_loss_value:.6f} id_acc={batch_id_acc:.6f}",
                 log_file,
             )
 
@@ -103,11 +113,13 @@ def train_one_epoch(
 
     avg_train_loss = total_loss / total_samples
     avg_ce_loss = total_ce_loss / total_samples
+    avg_triplet_loss = total_triplet_loss / total_samples
     train_id_acc = total_correct / total_samples
     return {
         "epoch": epoch,
         "avg_train_loss": avg_train_loss,
         "avg_ce_loss": avg_ce_loss,
+        "avg_triplet_loss": avg_triplet_loss,
         "train_id_acc": train_id_acc,
         "lr": _current_lr(optimizer),
         "num_batches": num_batches,
@@ -149,10 +161,29 @@ def run_training(
     grad_clip_norm = _grad_clip_norm(config)
     random_erasing = bool(config["data"].get("random_erasing", False))
     random_erasing_prob = _random_erasing_prob(config)
+    sampler_name = _sampler_name(config)
+    sampler_num_pids = _sampler_num_pids(config)
+    sampler_num_instances = _sampler_num_instances(config)
+    sampler_batches_per_epoch = _sampler_batches_per_epoch(config)
+    triplet_enabled = _triplet_enabled(config)
+    triplet_margin = _triplet_margin(config)
+    triplet_weight = _triplet_weight(config)
+    triplet_normalize_features = _triplet_normalize_features(config)
     _log(f"dataset_name={dataset_name}", log_file)
     _log(f"model_pretrained={bool(config['model'].get('pretrained', False))}", log_file)
     _log(f"random_erasing={random_erasing}", log_file)
     _log(f"random_erasing_prob={random_erasing_prob:.6f}", log_file)
+    _log(f"sampler_name={sampler_name}", log_file)
+    _log(f"sampler_num_pids={_format_optional_int(sampler_num_pids)}", log_file)
+    _log(f"sampler_num_instances={_format_optional_int(sampler_num_instances)}", log_file)
+    _log(
+        f"sampler_batches_per_epoch={_format_optional_int(sampler_batches_per_epoch)}",
+        log_file,
+    )
+    _log(f"triplet_enabled={triplet_enabled}", log_file)
+    _log(f"triplet_margin={_format_optional_metric(triplet_margin)}", log_file)
+    _log(f"triplet_weight={_format_optional_metric(triplet_weight)}", log_file)
+    _log(f"triplet_normalize_features={triplet_normalize_features}", log_file)
     _log(f"scheduler_name={_scheduler_name(config)}", log_file)
     _log(f"amp_enabled={amp_enabled}", log_file)
     _log(f"grad_clip_norm={_format_optional_metric(grad_clip_norm)}", log_file)
@@ -171,6 +202,10 @@ def run_training(
         num_workers=int(config["data"]["num_workers"]),
         pin_memory=bool(config["data"].get("pin_memory", False)),
         drop_last=bool(config["data"].get("drop_last", False)),
+        sampler_name=sampler_name if sampler_name != "shuffle" else None,
+        sampler_num_pids=sampler_num_pids,
+        sampler_num_instances=sampler_num_instances,
+        sampler_batches_per_epoch=sampler_batches_per_epoch,
     )
     pid_to_label = _build_pid_to_label(dataloader)
     num_train_ids = len(pid_to_label)
@@ -190,6 +225,7 @@ def run_training(
     criterion = build_classification_loss(
         label_smoothing=float(config["loss"]["label_smoothing"])
     )
+    triplet_criterion = _build_triplet_criterion(config)
     optimizer = torch.optim.Adam(
         model.parameters(),
         lr=float(config["optimizer"]["lr"]),
@@ -244,13 +280,16 @@ def run_training(
             amp_enabled=amp_enabled,
             scaler=scaler,
             grad_clip_norm=grad_clip_norm,
+            triplet_criterion=triplet_criterion,
+            triplet_weight=triplet_weight if triplet_enabled else 0.0,
         )
         epoch_metrics: dict[str, Any] = dict(train_metrics)
         history.append(epoch_metrics)
         _log(
             "epoch={epoch} avg_train_loss={avg_train_loss:.6f} "
-            "avg_ce_loss={avg_ce_loss:.6f} train_id_acc={train_id_acc:.6f} "
-            "lr={lr:.8f} num_batches={num_batches} num_samples={num_samples}".format(
+            "avg_ce_loss={avg_ce_loss:.6f} avg_triplet_loss={avg_triplet_loss:.6f} "
+            "train_id_acc={train_id_acc:.6f} lr={lr:.8f} "
+            "num_batches={num_batches} num_samples={num_samples}".format(
                 **epoch_metrics
             ),
             log_file,
@@ -320,10 +359,19 @@ def run_training(
         "epoch": final_epoch_metrics["epoch"],
         "avg_train_loss": final_epoch_metrics["avg_train_loss"],
         "avg_ce_loss": final_epoch_metrics["avg_ce_loss"],
+        "avg_triplet_loss": final_epoch_metrics["avg_triplet_loss"],
         "train_id_acc": final_epoch_metrics["train_id_acc"],
         "lr": final_epoch_metrics["lr"],
         "random_erasing": random_erasing,
         "random_erasing_prob": random_erasing_prob,
+        "sampler_name": sampler_name,
+        "sampler_num_pids": sampler_num_pids,
+        "sampler_num_instances": sampler_num_instances,
+        "sampler_batches_per_epoch": sampler_batches_per_epoch,
+        "triplet_enabled": triplet_enabled,
+        "triplet_margin": triplet_margin,
+        "triplet_weight": triplet_weight,
+        "triplet_normalize_features": triplet_normalize_features,
         "scheduler_name": _scheduler_name(config),
         "scheduler_state": _scheduler_state(
             config, optimizer, int(final_epoch_metrics["epoch"])
@@ -491,6 +539,75 @@ def _random_erasing_prob(config: Config) -> float:
     return float(config["data"].get("random_erasing_prob", 0.5))
 
 
+def _sampler_name(config: Config) -> str:
+    sampler_config = config.get("sampler")
+    if not sampler_config:
+        return "shuffle"
+    return str(sampler_config["name"])
+
+
+def _sampler_num_pids(config: Config) -> int | None:
+    sampler_config = config.get("sampler")
+    if not sampler_config:
+        return None
+    return int(sampler_config["num_pids"])
+
+
+def _sampler_num_instances(config: Config) -> int | None:
+    sampler_config = config.get("sampler")
+    if not sampler_config:
+        return None
+    return int(sampler_config["num_instances"])
+
+
+def _sampler_batches_per_epoch(config: Config) -> int | None:
+    sampler_config = config.get("sampler")
+    if not sampler_config:
+        return None
+    value = sampler_config.get("batches_per_epoch")
+    if value is None:
+        return None
+    return int(value)
+
+
+def _triplet_config(config: Config) -> dict[str, Any]:
+    triplet_config = config["loss"].get("triplet")
+    if not triplet_config:
+        return {}
+    return triplet_config
+
+
+def _triplet_enabled(config: Config) -> bool:
+    return bool(_triplet_config(config).get("enabled", False))
+
+
+def _triplet_margin(config: Config) -> float | None:
+    if not _triplet_enabled(config):
+        return None
+    return float(_triplet_config(config)["margin"])
+
+
+def _triplet_weight(config: Config) -> float:
+    if not _triplet_enabled(config):
+        return 0.0
+    return float(_triplet_config(config)["weight"])
+
+
+def _triplet_normalize_features(config: Config) -> bool:
+    if not _triplet_enabled(config):
+        return False
+    return bool(_triplet_config(config)["normalize_features"])
+
+
+def _build_triplet_criterion(config: Config) -> nn.Module | None:
+    if not _triplet_enabled(config):
+        return None
+    return BatchHardTripletLoss(
+        margin=float(_triplet_config(config)["margin"]),
+        normalize_features=bool(_triplet_config(config)["normalize_features"]),
+    )
+
+
 def _dataset_name(config: Config) -> str:
     return normalize_dataset_name(config.get("data", {}).get("name"))
 
@@ -612,6 +729,14 @@ def _write_run_summary(config: Config, metrics: dict[str, Any], output_path: Pat
             f"- model_pretrained: {bool(config['model'].get('pretrained', False))}",
             f"- random_erasing: {metrics['random_erasing']}",
             f"- random_erasing_prob: {metrics['random_erasing_prob']:.6f}",
+            f"- sampler_name: {metrics['sampler_name']}",
+            f"- sampler_num_pids: {_format_optional_int(metrics['sampler_num_pids'])}",
+            f"- sampler_num_instances: {_format_optional_int(metrics['sampler_num_instances'])}",
+            f"- sampler_batches_per_epoch: {_format_optional_int(metrics['sampler_batches_per_epoch'])}",
+            f"- triplet_enabled: {metrics['triplet_enabled']}",
+            f"- triplet_margin: {_format_optional_metric(metrics['triplet_margin'])}",
+            f"- triplet_weight: {_format_optional_metric(metrics['triplet_weight'])}",
+            f"- triplet_normalize_features: {metrics['triplet_normalize_features']}",
             f"- scheduler_name: {metrics['scheduler_name']}",
             f"- amp_enabled: {metrics['amp_enabled']}",
             f"- grad_clip_norm: {_format_optional_metric(metrics['grad_clip_norm'])}",
@@ -619,6 +744,7 @@ def _write_run_summary(config: Config, metrics: dict[str, Any], output_path: Pat
             f"- num_train_ids: {metrics['num_train_ids']}",
             f"- final_avg_train_loss: {metrics['avg_train_loss']:.6f}",
             f"- final_avg_ce_loss: {metrics['avg_ce_loss']:.6f}",
+            f"- final_avg_triplet_loss: {metrics['avg_triplet_loss']:.6f}",
             f"- final_train_id_acc: {metrics['train_id_acc']:.6f}",
             f"- best_metric_name: {metrics['best_metric_name']}",
             f"- best_epoch: {metrics['best_epoch']}",
@@ -638,3 +764,9 @@ def _format_optional_metric(value: float | None) -> str:
     if value is None:
         return "null"
     return f"{value:.6f}"
+
+
+def _format_optional_int(value: int | None) -> str:
+    if value is None:
+        return "null"
+    return str(value)

@@ -70,6 +70,7 @@ def validate_training_config(config: Config) -> None:
         _ensure_probability(random_erasing_prob, "data.random_erasing_prob")
     _ensure_positive_int(config["data"]["batch_size"], "data.batch_size")
     _ensure_non_negative_int(config["data"]["num_workers"], "data.num_workers")
+    _validate_sampler_config(config)
     _ensure_positive_int(config["model"]["num_classes"], "model.num_classes")
     _ensure_positive_int(config["model"]["feature_dim"], "model.feature_dim")
     _ensure_positive_int(config["model"]["last_stride"], "model.last_stride")
@@ -89,6 +90,7 @@ def validate_training_config(config: Config) -> None:
         _ensure_positive_float(grad_clip_norm, "train.grad_clip_norm")
 
     _ensure_non_negative_float(config["loss"]["label_smoothing"], "loss.label_smoothing")
+    _validate_triplet_config(config)
     _ensure_positive_float(config["optimizer"]["lr"], "optimizer.lr")
     _ensure_non_negative_float(config["optimizer"]["weight_decay"], "optimizer.weight_decay")
 
@@ -152,6 +154,32 @@ def _validate_eval_config(config: Config) -> None:
             _ensure_positive_int(value, f"eval.{key}")
 
 
+def _validate_sampler_config(config: Config) -> None:
+    if "sampler" not in config:
+        return
+
+    sampler_config = config["sampler"]
+    if not isinstance(sampler_config, dict):
+        raise ValueError("Config section must be a mapping: sampler")
+
+    name = sampler_config.get("name")
+    if name != "pk":
+        raise ValueError("sampler.name must be one of: pk")
+
+    for key in ("num_pids", "num_instances"):
+        if key not in sampler_config:
+            raise ValueError(f"Missing required config key: sampler.{key}")
+        _ensure_positive_int(sampler_config[key], f"sampler.{key}")
+
+    batches_per_epoch = sampler_config.get("batches_per_epoch")
+    if batches_per_epoch is not None:
+        _ensure_positive_int(batches_per_epoch, "sampler.batches_per_epoch")
+
+    expected_batch_size = sampler_config["num_pids"] * sampler_config["num_instances"]
+    if config["data"]["batch_size"] != expected_batch_size:
+        raise ValueError("data.batch_size must equal sampler.num_pids * sampler.num_instances")
+
+
 def _validate_scheduler_config(config: Config) -> None:
     if "scheduler" not in config:
         return
@@ -181,3 +209,26 @@ def _validate_scheduler_config(config: Config) -> None:
     _ensure_positive_float(warmup_factor, "scheduler.warmup_factor")
     if float(warmup_factor) > 1:
         raise ValueError("scheduler.warmup_factor must be less than or equal to 1")
+
+
+def _validate_triplet_config(config: Config) -> None:
+    triplet_config = config["loss"].get("triplet")
+    if triplet_config is None:
+        return
+    if not isinstance(triplet_config, dict):
+        raise ValueError("loss.triplet must be a mapping when provided")
+    if "enabled" not in triplet_config:
+        raise ValueError("Missing required config key: loss.triplet.enabled")
+    if not isinstance(triplet_config["enabled"], bool):
+        raise ValueError("loss.triplet.enabled must be a boolean")
+    if not triplet_config["enabled"]:
+        return
+
+    for key in ("margin", "weight", "normalize_features"):
+        if key not in triplet_config:
+            raise ValueError(f"Missing required config key: loss.triplet.{key}")
+
+    _ensure_positive_float(triplet_config["margin"], "loss.triplet.margin")
+    _ensure_positive_float(triplet_config["weight"], "loss.triplet.weight")
+    if not isinstance(triplet_config["normalize_features"], bool):
+        raise ValueError("loss.triplet.normalize_features must be a boolean")
