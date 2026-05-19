@@ -1,0 +1,61 @@
+run:
+  name: deit_base_patch16_global_local_sie_part_msmt17_384
+  seed: 42
+  smoke: false
+data:
+  name: msmt17_v1
+  root: data/MSMT17_V1
+  image_size: [384, 192]
+  batch_size: 64
+  num_workers: 8
+  random_erasing: true
+  random_erasing_prob: 0.5
+  padding: 10
+  pin_memory: true
+  drop_last: false
+sampler:
+  name: pk
+  num_pids: 16
+  num_instances: 4
+model:
+  name: vit_patch16_global_local
+  backbone_name: deit_base_patch16_224
+  num_classes: 1041
+  feature_dim: 768
+  pretrained: true
+  patch_size: 16
+  num_parts: 4
+  sie_camera: true
+  sie_num_cameras: 15
+  sie_coefficient: 3.0
+  part_classifiers: true
+loss:
+  label_smoothing: 0.0
+  part_weight: 0.5
+  triplet:
+    enabled: true
+    margin: 0.3
+    weight: 1.0
+    normalize_features: true
+optimizer:
+  name: adamw
+  lr: 0.00003
+  weight_decay: 0.05
+scheduler:
+  name: cosine
+  min_lr: 0.000001
+  warmup_epochs: 10
+  warmup_factor: 0.1
+train:
+  epochs: 60
+  max_batches:
+  log_interval: 20
+  amp: true
+  grad_clip_norm:
+eval:
+  enabled: true
+  interval: 2
+  batch_size: 256
+  num_workers: 8
+  distance: cosine
+  query_chunk_size: 512
