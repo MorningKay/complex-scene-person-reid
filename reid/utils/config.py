@@ -75,6 +75,7 @@ def validate_training_config(config: Config) -> None:
     _ensure_positive_int(config["model"]["num_classes"], "model.num_classes")
     _ensure_positive_int(config["model"]["feature_dim"], "model.feature_dim")
     _ensure_positive_int(config["train"]["epochs"], "train.epochs")
+    _validate_optimizer_config(config)
     _validate_scheduler_config(config)
     _validate_eval_config(config)
 
@@ -89,8 +90,6 @@ def validate_training_config(config: Config) -> None:
 
     _ensure_non_negative_float(config["loss"]["label_smoothing"], "loss.label_smoothing")
     _validate_triplet_config(config)
-    _ensure_positive_float(config["optimizer"]["lr"], "optimizer.lr")
-    _ensure_non_negative_float(config["optimizer"]["weight_decay"], "optimizer.weight_decay")
 
 
 def _ensure_positive_int(value: object, name: str) -> None:
@@ -150,6 +149,18 @@ def _validate_eval_config(config: Config) -> None:
         value = eval_config.get(key)
         if value is not None:
             _ensure_positive_int(value, f"eval.{key}")
+
+
+def _validate_optimizer_config(config: Config) -> None:
+    optimizer_config = config["optimizer"]
+    name = optimizer_config.get("name", "adam")
+    if not isinstance(name, str):
+        raise ValueError("optimizer.name must be a string when provided")
+    if name.lower() not in {"adam", "adamw"}:
+        raise ValueError("optimizer.name must be one of: adam, adamw")
+
+    _ensure_positive_float(optimizer_config["lr"], "optimizer.lr")
+    _ensure_non_negative_float(optimizer_config["weight_decay"], "optimizer.weight_decay")
 
 
 def _validate_model_config(config: Config) -> None:
