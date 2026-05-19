@@ -114,6 +114,20 @@ def make_vit_triplet_pk_config() -> dict:
     return config
 
 
+def make_vit_treid_lite_config() -> dict:
+    config = make_vit_triplet_pk_config()
+    config["run"]["name"] = "pytest_vit_treid_lite"
+    config["data"]["random_erasing"] = True
+    config["data"]["random_erasing_prob"] = 0.5
+    config["data"]["padding"] = 4
+    config["model"]["sie_camera"] = True
+    config["model"]["sie_num_cameras"] = 6
+    config["model"]["sie_coefficient"] = 2.0
+    config["model"]["part_classifiers"] = True
+    config["loss"]["part_weight"] = 1.0
+    return config
+
+
 def test_run_training_writes_smoke_artifacts(tmp_path: Path) -> None:
     if not DATA_ROOT.is_dir():
         pytest.skip(f"Market-1501 dataset not found at {DATA_ROOT}")
@@ -132,6 +146,10 @@ def test_run_training_writes_smoke_artifacts(tmp_path: Path) -> None:
     assert metrics["model_backbone_name"] is None
     assert metrics["model_pretrained"] is False
     assert metrics["model_pretrained_path"] is None
+    assert metrics["model_sie_camera"] is False
+    assert metrics["model_sie_num_cameras"] is None
+    assert metrics["model_sie_coefficient"] == pytest.approx(1.0)
+    assert metrics["model_part_classifiers"] is False
     assert metrics["optimizer_name"] == "adam"
     assert metrics["num_batches"] == 1
     assert metrics["num_samples"] == 2
@@ -145,6 +163,7 @@ def test_run_training_writes_smoke_artifacts(tmp_path: Path) -> None:
     assert metrics["scheduler_state"]["name"] == "constant"
     assert metrics["random_erasing"] is False
     assert metrics["random_erasing_prob"] == pytest.approx(0.5)
+    assert metrics["data_padding"] == 0
     assert metrics["sampler_name"] == "shuffle"
     assert metrics["sampler_num_pids"] is None
     assert metrics["sampler_num_instances"] is None
@@ -152,6 +171,7 @@ def test_run_training_writes_smoke_artifacts(tmp_path: Path) -> None:
     assert metrics["triplet_margin"] is None
     assert metrics["triplet_weight"] == pytest.approx(0.0)
     assert metrics["triplet_normalize_features"] is False
+    assert metrics["part_loss_weight"] == pytest.approx(1.0)
     assert metrics["amp_enabled"] is False
     assert metrics["grad_clip_norm"] is None
 
@@ -170,6 +190,8 @@ def test_run_training_writes_smoke_artifacts(tmp_path: Path) -> None:
     assert checkpoint["history"][0]["epoch"] == 1
     assert checkpoint["metrics"]["num_batches"] == 1
     assert "avg_ce_loss" in checkpoint["metrics"]
+    assert "avg_global_ce_loss" in checkpoint["metrics"]
+    assert "avg_part_ce_loss" in checkpoint["metrics"]
     assert "avg_triplet_loss" in checkpoint["metrics"]
     assert "train_id_acc" in checkpoint["metrics"]
     assert "lr" in checkpoint["metrics"]
@@ -185,9 +207,15 @@ def test_run_training_writes_smoke_artifacts(tmp_path: Path) -> None:
     assert metrics["model_backbone_name"] is None
     assert metrics["model_pretrained"] is False
     assert metrics["model_pretrained_path"] is None
+    assert metrics["model_sie_camera"] is False
+    assert metrics["model_sie_num_cameras"] is None
+    assert metrics["model_sie_coefficient"] == pytest.approx(1.0)
+    assert metrics["model_part_classifiers"] is False
     assert metrics["optimizer_name"] == "adam"
     assert metrics["num_train_ids"] == 751
     assert metrics["avg_ce_loss"] == pytest.approx(metrics["avg_train_loss"])
+    assert metrics["avg_global_ce_loss"] == pytest.approx(metrics["avg_ce_loss"])
+    assert metrics["avg_part_ce_loss"] == pytest.approx(0.0)
     assert metrics["avg_triplet_loss"] == pytest.approx(0.0)
     assert 0 <= metrics["train_id_acc"] <= 1
     assert metrics["best_metric_name"] == "mAP"
@@ -200,8 +228,10 @@ def test_run_training_writes_smoke_artifacts(tmp_path: Path) -> None:
     assert metrics["scheduler_name"] == "constant"
     assert metrics["random_erasing"] is False
     assert metrics["random_erasing_prob"] == pytest.approx(0.5)
+    assert metrics["data_padding"] == 0
     assert metrics["sampler_name"] == "shuffle"
     assert metrics["triplet_enabled"] is False
+    assert metrics["part_loss_weight"] == pytest.approx(1.0)
     assert metrics["history"][0]["avg_triplet_loss"] == pytest.approx(0.0)
     assert metrics["amp_enabled"] is False
     assert metrics["grad_clip_norm"] is None
@@ -212,11 +242,18 @@ def test_run_training_writes_smoke_artifacts(tmp_path: Path) -> None:
     assert "model_backbone_name=null" in train_log
     assert "model_pretrained=False" in train_log
     assert "model_pretrained_path=null" in train_log
+    assert "model_sie_camera=False" in train_log
+    assert "model_sie_num_cameras=null" in train_log
+    assert "model_part_classifiers=False" in train_log
     assert "optimizer_name=adam" in train_log
     assert "random_erasing=False" in train_log
     assert "random_erasing_prob=0.500000" in train_log
+    assert "data_padding=0" in train_log
     assert "sampler_name=shuffle" in train_log
     assert "triplet_enabled=False" in train_log
+    assert "part_loss_weight=1.000000" in train_log
+    assert "global_ce_loss=" in train_log
+    assert "part_ce_loss=" in train_log
     assert "triplet_loss=" in train_log
     assert "scheduler_name=constant" in train_log
     assert "amp_enabled=False" in train_log
@@ -233,16 +270,23 @@ def test_run_training_writes_smoke_artifacts(tmp_path: Path) -> None:
     assert "- model_backbone_name: null" in run_summary
     assert "- model_pretrained: False" in run_summary
     assert "- model_pretrained_path: null" in run_summary
+    assert "- model_sie_camera: False" in run_summary
+    assert "- model_sie_num_cameras: null" in run_summary
+    assert "- model_part_classifiers: False" in run_summary
     assert "- optimizer_name: adam" in run_summary
     assert "- random_erasing: False" in run_summary
     assert "- random_erasing_prob: 0.500000" in run_summary
+    assert "- data_padding: 0" in run_summary
     assert "- sampler_name: shuffle" in run_summary
     assert "- triplet_enabled: False" in run_summary
+    assert "- part_loss_weight: 1.000000" in run_summary
     assert "- scheduler_name: constant" in run_summary
     assert "- amp_enabled: False" in run_summary
     assert "- grad_clip_norm: null" in run_summary
     assert "- num_train_ids: 751" in run_summary
     assert "- final_avg_ce_loss:" in run_summary
+    assert "- final_avg_global_ce_loss:" in run_summary
+    assert "- final_avg_part_ce_loss:" in run_summary
     assert "- final_avg_triplet_loss:" in run_summary
     assert "- final_train_id_acc:" in run_summary
     assert "- best_metric_name: mAP" in run_summary
@@ -288,6 +332,12 @@ def test_validate_training_config_accepts_vit_model_name() -> None:
     validate_training_config(config)
 
 
+def test_validate_training_config_accepts_vit_treid_lite_controls() -> None:
+    config = make_vit_treid_lite_config()
+
+    validate_training_config(config)
+
+
 def test_validate_training_config_rejects_invalid_model_name() -> None:
     config = make_smoke_config()
     config["model"]["name"] = "mobilenet"
@@ -318,6 +368,10 @@ def test_validate_training_config_rejects_non_string_pretrained_path() -> None:
         ("backbone_name", 123, "model.backbone_name"),
         ("patch_size", 0, "model.patch_size"),
         ("num_parts", 0, "model.num_parts"),
+        ("sie_camera", "true", "model.sie_camera"),
+        ("sie_num_cameras", 0, "model.sie_num_cameras"),
+        ("sie_coefficient", 0.0, "model.sie_coefficient"),
+        ("part_classifiers", "true", "model.part_classifiers"),
     ],
 )
 def test_validate_training_config_rejects_invalid_vit_model_controls(
@@ -326,9 +380,19 @@ def test_validate_training_config_rejects_invalid_vit_model_controls(
     message: str,
 ) -> None:
     config = make_vit_triplet_pk_config()
+    if key == "sie_num_cameras":
+        config["model"]["sie_camera"] = True
     config["model"][key] = value
 
     with pytest.raises(ValueError, match=message):
+        validate_training_config(config)
+
+
+def test_validate_training_config_rejects_missing_vit_sie_num_cameras() -> None:
+    config = make_vit_treid_lite_config()
+    config["model"].pop("sie_num_cameras")
+
+    with pytest.raises(ValueError, match="model.sie_num_cameras"):
         validate_training_config(config)
 
 
@@ -532,6 +596,60 @@ def test_run_training_accepts_vit_adamw_triplet_pk_sampler(tmp_path: Path) -> No
     assert "- optimizer_name: adamw" in run_summary
     assert "- sampler_name: pk" in run_summary
     assert "- triplet_enabled: True" in run_summary
+
+
+def test_run_training_accepts_vit_sie_part_auxiliary_controls(tmp_path: Path) -> None:
+    if not DATA_ROOT.is_dir():
+        pytest.skip(f"Market-1501 dataset not found at {DATA_ROOT}")
+
+    output_dir = tmp_path / "vit_treid_lite"
+
+    metrics = run_training(
+        config=make_vit_treid_lite_config(),
+        output_dir=output_dir,
+        device="cpu",
+    )
+
+    assert metrics["model_name"] == "vit_patch16_global_local"
+    assert metrics["model_sie_camera"] is True
+    assert metrics["model_sie_num_cameras"] == 6
+    assert metrics["model_sie_coefficient"] == pytest.approx(2.0)
+    assert metrics["model_part_classifiers"] is True
+    assert metrics["data_padding"] == 4
+    assert metrics["random_erasing"] is True
+    assert metrics["part_loss_weight"] == pytest.approx(1.0)
+    assert metrics["avg_part_ce_loss"] > 0
+    assert metrics["avg_global_ce_loss"] > 0
+    assert metrics["avg_ce_loss"] == pytest.approx(
+        metrics["avg_global_ce_loss"] + metrics["avg_part_ce_loss"]
+    )
+    assert metrics["avg_train_loss"] == pytest.approx(
+        metrics["avg_ce_loss"] + metrics["avg_triplet_loss"]
+    )
+
+    checkpoint = torch.load(output_dir / "ckpt" / "latest.pth", map_location="cpu")
+    assert checkpoint["config"]["model"]["sie_camera"] is True
+    assert checkpoint["config"]["model"]["part_classifiers"] is True
+    assert "sie_camera_embeddings.weight" in checkpoint["model"]
+    assert "part_classifiers.0.weight" in checkpoint["model"]
+
+    train_log = (output_dir / "logs" / "train.txt").read_text(encoding="utf-8")
+    assert "model_sie_camera=True" in train_log
+    assert "model_sie_num_cameras=6" in train_log
+    assert "model_sie_coefficient=2.000000" in train_log
+    assert "model_part_classifiers=True" in train_log
+    assert "data_padding=4" in train_log
+    assert "part_loss_weight=1.000000" in train_log
+    assert "global_ce_loss=" in train_log
+    assert "part_ce_loss=" in train_log
+
+    run_summary = (output_dir / "run_summary.md").read_text(encoding="utf-8")
+    assert "- model_sie_camera: True" in run_summary
+    assert "- model_sie_num_cameras: 6" in run_summary
+    assert "- model_sie_coefficient: 2.000000" in run_summary
+    assert "- model_part_classifiers: True" in run_summary
+    assert "- data_padding: 4" in run_summary
+    assert "- final_avg_part_ce_loss:" in run_summary
 
 
 def test_run_training_accepts_msmt17_training_time_eval(tmp_path: Path) -> None:
@@ -801,6 +919,8 @@ def test_validate_training_config_rejects_invalid_train_controls(
         ("random_erasing_prob", 1.1, "data.random_erasing_prob"),
         ("random_erasing_prob", "0.5", "data.random_erasing_prob"),
         ("random_erasing_prob", True, "data.random_erasing_prob"),
+        ("padding", -1, "data.padding"),
+        ("padding", 1.5, "data.padding"),
     ],
 )
 def test_validate_training_config_rejects_invalid_random_erasing_controls(
@@ -812,6 +932,17 @@ def test_validate_training_config_rejects_invalid_random_erasing_controls(
     config["data"][key] = value
 
     with pytest.raises(ValueError, match=message):
+        validate_training_config(config)
+
+
+@pytest.mark.parametrize("part_weight", [0.0, -1.0, "1.0"])
+def test_validate_training_config_rejects_invalid_part_loss_weight(
+    part_weight: object,
+) -> None:
+    config = make_vit_treid_lite_config()
+    config["loss"]["part_weight"] = part_weight
+
+    with pytest.raises(ValueError, match="loss.part_weight"):
         validate_training_config(config)
 
 
@@ -1041,6 +1172,47 @@ def test_msmt17_deit_global_local_config_matches_vt_final_recipe() -> None:
     assert config["loss"]["triplet"]["normalize_features"] is True
     assert config["optimizer"]["name"] == "adamw"
     assert config["optimizer"]["lr"] == pytest.approx(0.0001)
+    assert config["optimizer"]["weight_decay"] == pytest.approx(0.05)
+    assert config["scheduler"]["name"] == "cosine"
+    assert config["scheduler"]["warmup_epochs"] == 5
+    assert config["train"]["epochs"] == 40
+    assert config["train"]["amp"] is True
+    assert config["eval"]["enabled"] is True
+    assert config["eval"]["query_chunk_size"] == 256
+
+
+def test_msmt17_deit_sie_part_config_matches_vt_treid_lite_recipe() -> None:
+    config = load_config("configs/deit_small_patch16_global_local_sie_part_msmt17.yaml")
+
+    assert config["run"]["name"] == "deit_small_patch16_global_local_sie_part_msmt17"
+    assert config["data"]["name"] == "msmt17_v1"
+    assert config["data"]["root"] == "data/MSMT17_V1"
+    assert config["data"]["image_size"] == [256, 128]
+    assert config["data"]["batch_size"] == 64
+    assert config["data"]["random_erasing"] is True
+    assert config["data"]["random_erasing_prob"] == pytest.approx(0.5)
+    assert config["data"]["padding"] == 10
+    assert config["model"]["name"] == "vit_patch16_global_local"
+    assert config["model"]["backbone_name"] == "deit_small_patch16_224"
+    assert config["model"]["num_classes"] == 1041
+    assert config["model"]["feature_dim"] == 512
+    assert config["model"]["pretrained"] is True
+    assert config["model"]["patch_size"] == 16
+    assert config["model"]["num_parts"] == 4
+    assert config["model"]["sie_camera"] is True
+    assert config["model"]["sie_num_cameras"] == 15
+    assert config["model"]["sie_coefficient"] == pytest.approx(2.0)
+    assert config["model"]["part_classifiers"] is True
+    assert config["sampler"]["name"] == "pk"
+    assert config["sampler"]["num_pids"] == 16
+    assert config["sampler"]["num_instances"] == 4
+    assert config["loss"]["part_weight"] == pytest.approx(1.0)
+    assert config["loss"]["triplet"]["enabled"] is True
+    assert config["loss"]["triplet"]["margin"] == pytest.approx(0.3)
+    assert config["loss"]["triplet"]["weight"] == pytest.approx(1.0)
+    assert config["loss"]["triplet"]["normalize_features"] is True
+    assert config["optimizer"]["name"] == "adamw"
+    assert config["optimizer"]["lr"] == pytest.approx(0.00005)
     assert config["optimizer"]["weight_decay"] == pytest.approx(0.05)
     assert config["scheduler"]["name"] == "cosine"
     assert config["scheduler"]["warmup_epochs"] == 5

@@ -37,6 +37,17 @@ def test_train_transform_can_enable_random_erasing() -> None:
     assert transform.transforms[-1].p == 0.25
 
 
+def test_train_transform_can_enable_padding_random_crop() -> None:
+    transform = build_train_transform(image_size=(64, 32), padding=8)
+
+    image = transform(make_image())
+    transform_types = tuple(type(step) for step in transform.transforms)
+
+    assert image.shape == (3, 64, 32)
+    assert transforms.Pad in transform_types
+    assert transforms.RandomCrop in transform_types
+
+
 def test_eval_transform_returns_tensor_without_random_augmentation() -> None:
     transform = build_eval_transform(image_size=(256, 128))
 
@@ -113,6 +124,24 @@ def test_train_dataloader_passes_random_erasing_probability() -> None:
     assert transform.transforms[-1].p == 0.25
 
 
+def test_train_dataloader_passes_padding_to_train_transform() -> None:
+    if not DATA_ROOT.is_dir():
+        pytest.skip(f"Market-1501 dataset not found at {DATA_ROOT}")
+
+    dataloader = build_reid_dataloader(
+        name="market1501",
+        root=DATA_ROOT,
+        split="train",
+        batch_size=2,
+        padding=8,
+        num_workers=0,
+    )
+    transform_types = tuple(type(step) for step in dataloader.dataset.transform.transforms)
+
+    assert transforms.Pad in transform_types
+    assert transforms.RandomCrop in transform_types
+
+
 def test_eval_dataloader_ignores_random_erasing_controls() -> None:
     if not DATA_ROOT.is_dir():
         pytest.skip(f"Market-1501 dataset not found at {DATA_ROOT}")
@@ -124,8 +153,11 @@ def test_eval_dataloader_ignores_random_erasing_controls() -> None:
         batch_size=2,
         random_erasing=True,
         random_erasing_prob=0.25,
+        padding=8,
         num_workers=0,
     )
     transform_types = tuple(type(step) for step in dataloader.dataset.transform.transforms)
 
     assert transforms.RandomErasing not in transform_types
+    assert transforms.Pad not in transform_types
+    assert transforms.RandomCrop not in transform_types
