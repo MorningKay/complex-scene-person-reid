@@ -62,6 +62,14 @@ def build_reid_model(config: Config, load_pretrained: bool = True) -> nn.Module:
             num_parts=int(model_config.get("num_parts", 4)),
             feature_dim=feature_dim,
             pretrained=pretrained,
+            sie_camera=bool(model_config.get("sie_camera", False)),
+            sie_num_cameras=(
+                int(model_config["sie_num_cameras"])
+                if model_config.get("sie_num_cameras") is not None
+                else None
+            ),
+            sie_coefficient=float(model_config.get("sie_coefficient", 1.0)),
+            part_classifiers=bool(model_config.get("part_classifiers", False)),
         )
 
     raise ValueError("model.name must be one of: resnet50, osnet_x1_0, vit_patch16_global_local")

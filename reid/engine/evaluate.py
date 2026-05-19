@@ -82,7 +82,8 @@ def extract_features(
     with torch.inference_mode():
         for images, batch_pids, batch_camids, batch_paths in dataloader:
             images = images.to(resolved_device, non_blocking=True)
-            batch_features = model(images, return_feature=True)
+            camids_for_model = batch_camids.to(resolved_device, non_blocking=True)
+            batch_features = model(images, return_feature=True, camids=camids_for_model)
             features.append(batch_features.detach().cpu())
             pids.append(batch_pids.detach().cpu())
             camids.append(batch_camids.detach().cpu())

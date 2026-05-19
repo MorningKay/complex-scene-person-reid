@@ -68,6 +68,9 @@ def validate_training_config(config: Config) -> None:
     random_erasing_prob = config["data"].get("random_erasing_prob")
     if random_erasing_prob is not None:
         _ensure_probability(random_erasing_prob, "data.random_erasing_prob")
+    padding = config["data"].get("padding")
+    if padding is not None:
+        _ensure_non_negative_int(padding, "data.padding")
     _ensure_positive_int(config["data"]["batch_size"], "data.batch_size")
     _ensure_non_negative_int(config["data"]["num_workers"], "data.num_workers")
     _validate_sampler_config(config)
@@ -89,6 +92,9 @@ def validate_training_config(config: Config) -> None:
         _ensure_positive_float(grad_clip_norm, "train.grad_clip_norm")
 
     _ensure_non_negative_float(config["loss"]["label_smoothing"], "loss.label_smoothing")
+    part_weight = config["loss"].get("part_weight")
+    if part_weight is not None:
+        _ensure_positive_float(part_weight, "loss.part_weight")
     _validate_triplet_config(config)
 
 
@@ -204,6 +210,19 @@ def _validate_model_config(config: Config) -> None:
         num_parts = model_config.get("num_parts", 4)
         _ensure_positive_int(patch_size, "model.patch_size")
         _ensure_positive_int(num_parts, "model.num_parts")
+        sie_camera = model_config.get("sie_camera", False)
+        if not isinstance(sie_camera, bool):
+            raise ValueError("model.sie_camera must be a boolean when provided")
+        if sie_camera:
+            if "sie_num_cameras" not in model_config:
+                raise ValueError("Missing required config key: model.sie_num_cameras")
+            _ensure_positive_int(model_config["sie_num_cameras"], "model.sie_num_cameras")
+        sie_coefficient = model_config.get("sie_coefficient")
+        if sie_coefficient is not None:
+            _ensure_positive_float(sie_coefficient, "model.sie_coefficient")
+        part_classifiers = model_config.get("part_classifiers", False)
+        if not isinstance(part_classifiers, bool):
+            raise ValueError("model.part_classifiers must be a boolean when provided")
 
 
 def _validate_sampler_config(config: Config) -> None:

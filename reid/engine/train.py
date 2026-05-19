@@ -45,26 +45,33 @@ def train_one_epoch(
     grad_clip_norm: float | None = None,
     triplet_criterion: nn.Module | None = None,
     triplet_weight: float = 0.0,
+    part_loss_weight: float = 1.0,
 ) -> dict[str, float | int]:
     model.train()
     total_loss = 0.0
     total_ce_loss = 0.0
+    total_global_ce_loss = 0.0
+    total_part_ce_loss = 0.0
     total_triplet_loss = 0.0
     total_samples = 0
     total_correct = 0
     num_batches = 0
 
-    for batch_index, (images, pids, _camids, _paths) in enumerate(dataloader, start=1):
+    for batch_index, (images, pids, camids, _paths) in enumerate(dataloader, start=1):
         if max_batches is not None and batch_index > max_batches:
             break
 
         images = images.to(device, non_blocking=True)
+        camids = camids.to(device, non_blocking=True)
         labels = _map_pids_to_labels(pids, pid_to_label, device)
 
         optimizer.zero_grad(set_to_none=True)
         with torch.amp.autocast(device_type=device.type, enabled=amp_enabled):
-            logits, features = model(images)
-            ce_loss = criterion(logits, labels)
+            model_output = model(images, camids=camids)
+            logits, features, part_logits = _unpack_training_output(model_output)
+            global_ce_loss = criterion(logits, labels)
+            part_ce_loss = _compute_part_ce_loss(part_logits, criterion, labels)
+            ce_loss = global_ce_loss + part_loss_weight * part_ce_loss
         if triplet_criterion is None:
             triplet_loss = ce_loss.new_zeros(())
         else:
@@ -89,12 +96,16 @@ def train_one_epoch(
         batch_size = images.shape[0]
         loss_value = float(loss.detach().cpu())
         ce_loss_value = float(ce_loss.detach().cpu())
+        global_ce_loss_value = float(global_ce_loss.detach().cpu())
+        part_ce_loss_value = float(part_ce_loss.detach().cpu())
         triplet_loss_value = float(triplet_loss.detach().cpu())
         batch_correct = int(logits.detach().argmax(dim=1).eq(labels).sum().cpu())
         batch_id_acc = batch_correct / batch_size
         lr = _current_lr(optimizer)
         total_loss += loss_value * batch_size
         total_ce_loss += ce_loss_value * batch_size
+        total_global_ce_loss += global_ce_loss_value * batch_size
+        total_part_ce_loss += part_ce_loss_value * batch_size
         total_triplet_loss += triplet_loss_value * batch_size
         total_samples += batch_size
         total_correct += batch_correct
@@ -104,6 +115,8 @@ def train_one_epoch(
             _log(
                 f"epoch={epoch} batch={batch_index} lr={lr:.8f} "
                 f"loss={loss_value:.6f} ce_loss={ce_loss_value:.6f} "
+                f"global_ce_loss={global_ce_loss_value:.6f} "
+                f"part_ce_loss={part_ce_loss_value:.6f} "
                 f"triplet_loss={triplet_loss_value:.6f} id_acc={batch_id_acc:.6f}",
                 log_file,
             )
@@ -113,12 +126,16 @@ def train_one_epoch(
 
     avg_train_loss = total_loss / total_samples
     avg_ce_loss = total_ce_loss / total_samples
+    avg_global_ce_loss = total_global_ce_loss / total_samples
+    avg_part_ce_loss = total_part_ce_loss / total_samples
     avg_triplet_loss = total_triplet_loss / total_samples
     train_id_acc = total_correct / total_samples
     return {
         "epoch": epoch,
         "avg_train_loss": avg_train_loss,
         "avg_ce_loss": avg_ce_loss,
+        "avg_global_ce_loss": avg_global_ce_loss,
+        "avg_part_ce_loss": avg_part_ce_loss,
         "avg_triplet_loss": avg_triplet_loss,
         "train_id_acc": train_id_acc,
         "lr": _current_lr(optimizer),
@@ -161,9 +178,14 @@ def run_training(
     grad_clip_norm = _grad_clip_norm(config)
     random_erasing = bool(config["data"].get("random_erasing", False))
     random_erasing_prob = _random_erasing_prob(config)
+    data_padding = _data_padding(config)
     model_name = _model_name(config)
     model_backbone_name = _model_backbone_name(config)
     model_pretrained_path = _model_pretrained_path(config)
+    model_sie_camera = _model_sie_camera(config)
+    model_sie_num_cameras = _model_sie_num_cameras(config)
+    model_sie_coefficient = _model_sie_coefficient(config)
+    model_part_classifiers = _model_part_classifiers(config)
     optimizer_name = _optimizer_name(config)
     sampler_name = _sampler_name(config)
     sampler_num_pids = _sampler_num_pids(config)
@@ -173,14 +195,20 @@ def run_training(
     triplet_margin = _triplet_margin(config)
     triplet_weight = _triplet_weight(config)
     triplet_normalize_features = _triplet_normalize_features(config)
+    part_loss_weight = _part_loss_weight(config)
     _log(f"dataset_name={dataset_name}", log_file)
     _log(f"model_name={model_name}", log_file)
     _log(f"model_backbone_name={_format_optional_string(model_backbone_name)}", log_file)
     _log(f"model_pretrained={bool(config['model'].get('pretrained', False))}", log_file)
     _log(f"model_pretrained_path={_format_optional_string(model_pretrained_path)}", log_file)
+    _log(f"model_sie_camera={model_sie_camera}", log_file)
+    _log(f"model_sie_num_cameras={_format_optional_int(model_sie_num_cameras)}", log_file)
+    _log(f"model_sie_coefficient={model_sie_coefficient:.6f}", log_file)
+    _log(f"model_part_classifiers={model_part_classifiers}", log_file)
     _log(f"optimizer_name={optimizer_name}", log_file)
     _log(f"random_erasing={random_erasing}", log_file)
     _log(f"random_erasing_prob={random_erasing_prob:.6f}", log_file)
+    _log(f"data_padding={data_padding}", log_file)
     _log(f"sampler_name={sampler_name}", log_file)
     _log(f"sampler_num_pids={_format_optional_int(sampler_num_pids)}", log_file)
     _log(f"sampler_num_instances={_format_optional_int(sampler_num_instances)}", log_file)
@@ -192,6 +220,7 @@ def run_training(
     _log(f"triplet_margin={_format_optional_metric(triplet_margin)}", log_file)
     _log(f"triplet_weight={_format_optional_metric(triplet_weight)}", log_file)
     _log(f"triplet_normalize_features={triplet_normalize_features}", log_file)
+    _log(f"part_loss_weight={part_loss_weight:.6f}", log_file)
     _log(f"scheduler_name={_scheduler_name(config)}", log_file)
     _log(f"amp_enabled={amp_enabled}", log_file)
     _log(f"grad_clip_norm={_format_optional_metric(grad_clip_norm)}", log_file)
@@ -206,6 +235,7 @@ def run_training(
         image_size=tuple(config["data"].get("image_size", (256, 128))),
         random_erasing=random_erasing,
         random_erasing_prob=random_erasing_prob,
+        padding=data_padding,
         shuffle=True,
         num_workers=int(config["data"]["num_workers"]),
         pin_memory=bool(config["data"].get("pin_memory", False)),
@@ -281,12 +311,16 @@ def run_training(
             grad_clip_norm=grad_clip_norm,
             triplet_criterion=triplet_criterion,
             triplet_weight=triplet_weight if triplet_enabled else 0.0,
+            part_loss_weight=part_loss_weight,
         )
         epoch_metrics: dict[str, Any] = dict(train_metrics)
         history.append(epoch_metrics)
         _log(
             "epoch={epoch} avg_train_loss={avg_train_loss:.6f} "
-            "avg_ce_loss={avg_ce_loss:.6f} avg_triplet_loss={avg_triplet_loss:.6f} "
+            "avg_ce_loss={avg_ce_loss:.6f} "
+            "avg_global_ce_loss={avg_global_ce_loss:.6f} "
+            "avg_part_ce_loss={avg_part_ce_loss:.6f} "
+            "avg_triplet_loss={avg_triplet_loss:.6f} "
             "train_id_acc={train_id_acc:.6f} lr={lr:.8f} "
             "num_batches={num_batches} num_samples={num_samples}".format(
                 **epoch_metrics
@@ -372,14 +406,21 @@ def run_training(
         "model_backbone_name": model_backbone_name,
         "model_pretrained": bool(config["model"].get("pretrained", False)),
         "model_pretrained_path": model_pretrained_path,
+        "model_sie_camera": model_sie_camera,
+        "model_sie_num_cameras": model_sie_num_cameras,
+        "model_sie_coefficient": model_sie_coefficient,
+        "model_part_classifiers": model_part_classifiers,
         "optimizer_name": optimizer_name,
         "avg_train_loss": final_epoch_metrics["avg_train_loss"],
         "avg_ce_loss": final_epoch_metrics["avg_ce_loss"],
+        "avg_global_ce_loss": final_epoch_metrics["avg_global_ce_loss"],
+        "avg_part_ce_loss": final_epoch_metrics["avg_part_ce_loss"],
         "avg_triplet_loss": final_epoch_metrics["avg_triplet_loss"],
         "train_id_acc": final_epoch_metrics["train_id_acc"],
         "lr": final_epoch_metrics["lr"],
         "random_erasing": random_erasing,
         "random_erasing_prob": random_erasing_prob,
+        "data_padding": data_padding,
         "sampler_name": sampler_name,
         "sampler_num_pids": sampler_num_pids,
         "sampler_num_instances": sampler_num_instances,
@@ -388,6 +429,7 @@ def run_training(
         "triplet_margin": triplet_margin,
         "triplet_weight": triplet_weight,
         "triplet_normalize_features": triplet_normalize_features,
+        "part_loss_weight": part_loss_weight,
         "scheduler_name": _scheduler_name(config),
         "scheduler_state": _scheduler_state(
             config, optimizer, int(final_epoch_metrics["epoch"])
@@ -433,6 +475,33 @@ def _map_pids_to_labels(
     except KeyError as exc:
         raise ValueError(f"Unknown train pid in batch: {exc.args[0]}") from exc
     return torch.tensor(labels, dtype=torch.long, device=device)
+
+
+def _unpack_training_output(
+    model_output: object,
+) -> tuple[torch.Tensor, torch.Tensor, tuple[torch.Tensor, ...]]:
+    if not isinstance(model_output, tuple):
+        raise ValueError("Training model forward must return logits and features")
+    if len(model_output) == 2:
+        logits, features = model_output
+        return logits, features, ()
+    if len(model_output) == 3:
+        logits, features, part_logits = model_output
+        if not isinstance(part_logits, tuple):
+            raise ValueError("Part logits must be returned as a tuple")
+        return logits, features, part_logits
+    raise ValueError("Training model forward must return 2 or 3 values")
+
+
+def _compute_part_ce_loss(
+    part_logits: tuple[torch.Tensor, ...],
+    criterion: nn.Module,
+    labels: torch.Tensor,
+) -> torch.Tensor:
+    if not part_logits:
+        return labels.new_zeros((), dtype=torch.float32)
+    losses = [criterion(logits, labels) for logits in part_logits]
+    return torch.stack(losses).mean()
 
 
 def _build_pid_to_label(dataloader: torch.utils.data.DataLoader) -> dict[int, int]:
@@ -567,6 +636,10 @@ def _random_erasing_prob(config: Config) -> float:
     return float(config["data"].get("random_erasing_prob", 0.5))
 
 
+def _data_padding(config: Config) -> int:
+    return int(config["data"].get("padding", 0))
+
+
 def _model_name(config: Config) -> str:
     return normalize_model_name(config.get("model", {}).get("name"))
 
@@ -583,6 +656,24 @@ def _model_pretrained_path(config: Config) -> str | None:
     if value is None:
         return None
     return str(value)
+
+
+def _model_sie_camera(config: Config) -> bool:
+    return bool(config.get("model", {}).get("sie_camera", False))
+
+
+def _model_sie_num_cameras(config: Config) -> int | None:
+    if not _model_sie_camera(config):
+        return None
+    return int(config["model"]["sie_num_cameras"])
+
+
+def _model_sie_coefficient(config: Config) -> float:
+    return float(config.get("model", {}).get("sie_coefficient", 1.0))
+
+
+def _model_part_classifiers(config: Config) -> bool:
+    return bool(config.get("model", {}).get("part_classifiers", False))
 
 
 def _optimizer_name(config: Config) -> str:
@@ -660,6 +751,10 @@ def _triplet_normalize_features(config: Config) -> bool:
     if not _triplet_enabled(config):
         return False
     return bool(_triplet_config(config)["normalize_features"])
+
+
+def _part_loss_weight(config: Config) -> float:
+    return float(config["loss"].get("part_weight", 1.0))
 
 
 def _build_triplet_criterion(config: Config) -> nn.Module | None:
@@ -808,9 +903,14 @@ def _write_run_summary(config: Config, metrics: dict[str, Any], output_path: Pat
         f"- model_backbone_name: {_format_optional_string(metrics['model_backbone_name'])}",
         f"- model_pretrained: {metrics['model_pretrained']}",
         f"- model_pretrained_path: {_format_optional_string(metrics['model_pretrained_path'])}",
+        f"- model_sie_camera: {metrics['model_sie_camera']}",
+        f"- model_sie_num_cameras: {_format_optional_int(metrics['model_sie_num_cameras'])}",
+        f"- model_sie_coefficient: {metrics['model_sie_coefficient']:.6f}",
+        f"- model_part_classifiers: {metrics['model_part_classifiers']}",
         f"- optimizer_name: {metrics['optimizer_name']}",
         f"- random_erasing: {metrics['random_erasing']}",
         f"- random_erasing_prob: {metrics['random_erasing_prob']:.6f}",
+        f"- data_padding: {metrics['data_padding']}",
         f"- sampler_name: {metrics['sampler_name']}",
         f"- sampler_num_pids: {_format_optional_int(metrics['sampler_num_pids'])}",
         f"- sampler_num_instances: {_format_optional_int(metrics['sampler_num_instances'])}",
@@ -819,6 +919,7 @@ def _write_run_summary(config: Config, metrics: dict[str, Any], output_path: Pat
         f"- triplet_margin: {_format_optional_metric(metrics['triplet_margin'])}",
         f"- triplet_weight: {_format_optional_metric(metrics['triplet_weight'])}",
         f"- triplet_normalize_features: {metrics['triplet_normalize_features']}",
+        f"- part_loss_weight: {metrics['part_loss_weight']:.6f}",
         f"- scheduler_name: {metrics['scheduler_name']}",
         f"- amp_enabled: {metrics['amp_enabled']}",
         f"- grad_clip_norm: {_format_optional_metric(metrics['grad_clip_norm'])}",
@@ -826,6 +927,8 @@ def _write_run_summary(config: Config, metrics: dict[str, Any], output_path: Pat
         f"- num_train_ids: {metrics['num_train_ids']}",
         f"- final_avg_train_loss: {metrics['avg_train_loss']:.6f}",
         f"- final_avg_ce_loss: {metrics['avg_ce_loss']:.6f}",
+        f"- final_avg_global_ce_loss: {metrics['avg_global_ce_loss']:.6f}",
+        f"- final_avg_part_ce_loss: {metrics['avg_part_ce_loss']:.6f}",
         f"- final_avg_triplet_loss: {metrics['avg_triplet_loss']:.6f}",
         f"- final_train_id_acc: {metrics['train_id_acc']:.6f}",
         f"- best_metric_name: {metrics['best_metric_name']}",

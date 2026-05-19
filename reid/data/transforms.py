@@ -13,13 +13,25 @@ def build_train_transform(
     image_size: ImageSize = (256, 128),
     random_erasing: bool = False,
     erase_prob: float = 0.5,
+    padding: int = 0,
 ) -> transforms.Compose:
     steps = [
         transforms.Resize(image_size),
         transforms.RandomHorizontalFlip(p=0.5),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
     ]
+    if padding > 0:
+        steps.extend(
+            [
+                transforms.Pad(padding),
+                transforms.RandomCrop(image_size),
+            ]
+        )
+    steps.extend(
+        [
+            transforms.ToTensor(),
+            transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
+        ]
+    )
     if random_erasing:
         steps.append(transforms.RandomErasing(p=erase_prob))
 

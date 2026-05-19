@@ -289,7 +289,9 @@ class OSNetReID(nn.Module):
         self,
         x: torch.Tensor,
         return_feature: bool = False,
+        camids: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor] | torch.Tensor:
+        del camids
         features = self.extract_features(x)
         bn_features = self.bnneck(features)
 
