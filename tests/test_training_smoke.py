@@ -1222,6 +1222,50 @@ def test_msmt17_deit_sie_part_config_matches_vt_treid_lite_recipe() -> None:
     assert config["eval"]["query_chunk_size"] == 256
 
 
+def test_msmt17_deit_base_384_config_matches_vt_strong_recipe() -> None:
+    config = load_config("configs/deit_base_patch16_global_local_sie_part_msmt17_384.yaml")
+
+    assert config["run"]["name"] == "deit_base_patch16_global_local_sie_part_msmt17_384"
+    assert config["data"]["name"] == "msmt17_v1"
+    assert config["data"]["root"] == "data/MSMT17_V1"
+    assert config["data"]["image_size"] == [384, 192]
+    assert config["data"]["batch_size"] == 64
+    assert config["data"]["random_erasing"] is True
+    assert config["data"]["random_erasing_prob"] == pytest.approx(0.5)
+    assert config["data"]["padding"] == 10
+    assert config["model"]["name"] == "vit_patch16_global_local"
+    assert config["model"]["backbone_name"] == "deit_base_patch16_224"
+    assert config["model"]["num_classes"] == 1041
+    assert config["model"]["feature_dim"] == 768
+    assert config["model"]["pretrained"] is True
+    assert config["model"]["patch_size"] == 16
+    assert config["model"]["num_parts"] == 4
+    assert config["model"]["sie_camera"] is True
+    assert config["model"]["sie_num_cameras"] == 15
+    assert config["model"]["sie_coefficient"] == pytest.approx(3.0)
+    assert config["model"]["part_classifiers"] is True
+    assert config["sampler"]["name"] == "pk"
+    assert config["sampler"]["num_pids"] == 16
+    assert config["sampler"]["num_instances"] == 4
+    assert config["loss"]["part_weight"] == pytest.approx(0.5)
+    assert config["loss"]["triplet"]["enabled"] is True
+    assert config["loss"]["triplet"]["margin"] == pytest.approx(0.3)
+    assert config["loss"]["triplet"]["weight"] == pytest.approx(1.0)
+    assert config["loss"]["triplet"]["normalize_features"] is True
+    assert config["optimizer"]["name"] == "adamw"
+    assert config["optimizer"]["lr"] == pytest.approx(0.00003)
+    assert config["optimizer"]["weight_decay"] == pytest.approx(0.05)
+    assert config["scheduler"]["name"] == "cosine"
+    assert config["scheduler"]["warmup_epochs"] == 10
+    assert config["train"]["epochs"] == 60
+    assert config["train"]["amp"] is True
+    assert config["eval"]["enabled"] is True
+    assert config["eval"]["interval"] == 2
+    assert config["eval"]["batch_size"] == 256
+    assert config["eval"]["num_workers"] == 8
+    assert config["eval"]["query_chunk_size"] == 512
+
+
 def test_vc_clothes_resnet_config_matches_base_recipe() -> None:
     config = load_config("configs/resnet50_ce_pretrained_vc_clothes.yaml")
 
