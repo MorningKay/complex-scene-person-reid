@@ -61,6 +61,24 @@ def make_osnet_smoke_config() -> dict:
     return config
 
 
+def make_vit_smoke_config() -> dict:
+    config = make_smoke_config()
+    config["run"]["name"] = "eval_vit_pytest_smoke"
+    config["data"]["image_size"] = [64, 32]
+    config["data"]["batch_size"] = 4
+    config["model"] = {
+        "name": "vit_patch16_global_local",
+        "backbone_name": "deit_tiny_patch16_224",
+        "num_classes": 751,
+        "feature_dim": 128,
+        "pretrained": False,
+        "patch_size": 16,
+        "num_parts": 4,
+    }
+    config["optimizer"]["name"] = "adamw"
+    return config
+
+
 def test_run_evaluation_writes_metrics_and_log(tmp_path: Path) -> None:
     if not DATA_ROOT.is_dir():
         pytest.skip(f"Market-1501 dataset not found at {DATA_ROOT}")
@@ -263,6 +281,42 @@ def test_run_evaluation_reloads_osnet_checkpoint(tmp_path: Path) -> None:
     eval_log = (eval_dir / "logs" / "eval.txt").read_text(encoding="utf-8")
     assert "dataset_name=market1501" in eval_log
     assert "query_chunk_size=2" in eval_log
+
+
+def test_run_evaluation_reloads_vit_checkpoint(tmp_path: Path) -> None:
+    if not DATA_ROOT.is_dir():
+        pytest.skip(f"Market-1501 dataset not found at {DATA_ROOT}")
+
+    train_dir = tmp_path / "vit_train"
+    eval_dir = tmp_path / "vit_eval"
+    run_training(config=make_vit_smoke_config(), output_dir=train_dir, device="cpu")
+
+    metrics = run_evaluation(
+        checkpoint_path=train_dir / "ckpt" / "best.pth",
+        data_root=DATA_ROOT,
+        output_dir=eval_dir,
+        device="cpu",
+        batch_size=4,
+        num_workers=0,
+        max_query=8,
+        max_gallery=32,
+        query_chunk_size=2,
+    )
+
+    assert metrics["dataset_name"] == "market1501"
+    assert metrics["query_chunk_size"] == 2
+    assert metrics["num_query"] == 8
+    assert metrics["num_gallery"] == 32
+    for key in ("rank1", "rank5", "rank10", "mAP"):
+        assert 0 <= metrics[key] <= 1
+
+    checkpoint = torch.load(train_dir / "ckpt" / "best.pth", map_location="cpu")
+    assert checkpoint["config"]["model"]["name"] == "vit_patch16_global_local"
+    assert checkpoint["config"]["optimizer"]["name"] == "adamw"
+
+    eval_log = (eval_dir / "logs" / "eval.txt").read_text(encoding="utf-8")
+    assert "dataset_name=market1501" in eval_log
+    assert "query_features=(8, 128)" in eval_log
 
 
 def test_run_evaluation_writes_reranking_metrics(tmp_path: Path) -> None:

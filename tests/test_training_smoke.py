@@ -84,6 +84,36 @@ def make_osnet_triplet_pk_config() -> dict:
     return config
 
 
+def make_vit_triplet_pk_config() -> dict:
+    config = make_smoke_config()
+    config["run"]["name"] = "pytest_vit_triplet_pk"
+    config["data"]["image_size"] = [64, 32]
+    config["data"]["batch_size"] = 4
+    config["eval"] = {"enabled": False}
+    config["model"] = {
+        "name": "vit_patch16_global_local",
+        "backbone_name": "deit_tiny_patch16_224",
+        "num_classes": 751,
+        "feature_dim": 128,
+        "pretrained": False,
+        "patch_size": 16,
+        "num_parts": 4,
+    }
+    config["optimizer"]["name"] = "adamw"
+    config["sampler"] = {
+        "name": "pk",
+        "num_pids": 2,
+        "num_instances": 2,
+    }
+    config["loss"]["triplet"] = {
+        "enabled": True,
+        "margin": 0.3,
+        "weight": 1.0,
+        "normalize_features": True,
+    }
+    return config
+
+
 def test_run_training_writes_smoke_artifacts(tmp_path: Path) -> None:
     if not DATA_ROOT.is_dir():
         pytest.skip(f"Market-1501 dataset not found at {DATA_ROOT}")
@@ -99,8 +129,10 @@ def test_run_training_writes_smoke_artifacts(tmp_path: Path) -> None:
     assert metrics["epoch"] == 1
     assert metrics["dataset_name"] == "market1501"
     assert metrics["model_name"] == "resnet50"
+    assert metrics["model_backbone_name"] is None
     assert metrics["model_pretrained"] is False
     assert metrics["model_pretrained_path"] is None
+    assert metrics["optimizer_name"] == "adam"
     assert metrics["num_batches"] == 1
     assert metrics["num_samples"] == 2
     assert metrics["num_train_ids"] == 751
@@ -150,8 +182,10 @@ def test_run_training_writes_smoke_artifacts(tmp_path: Path) -> None:
     metrics = json.loads((output_dir / "metrics.json").read_text(encoding="utf-8"))
     assert metrics["dataset_name"] == "market1501"
     assert metrics["model_name"] == "resnet50"
+    assert metrics["model_backbone_name"] is None
     assert metrics["model_pretrained"] is False
     assert metrics["model_pretrained_path"] is None
+    assert metrics["optimizer_name"] == "adam"
     assert metrics["num_train_ids"] == 751
     assert metrics["avg_ce_loss"] == pytest.approx(metrics["avg_train_loss"])
     assert metrics["avg_triplet_loss"] == pytest.approx(0.0)
@@ -175,8 +209,10 @@ def test_run_training_writes_smoke_artifacts(tmp_path: Path) -> None:
     train_log = (output_dir / "logs" / "train.txt").read_text(encoding="utf-8")
     assert "dataset_name=market1501" in train_log
     assert "model_name=resnet50" in train_log
+    assert "model_backbone_name=null" in train_log
     assert "model_pretrained=False" in train_log
     assert "model_pretrained_path=null" in train_log
+    assert "optimizer_name=adam" in train_log
     assert "random_erasing=False" in train_log
     assert "random_erasing_prob=0.500000" in train_log
     assert "sampler_name=shuffle" in train_log
@@ -194,8 +230,10 @@ def test_run_training_writes_smoke_artifacts(tmp_path: Path) -> None:
     run_summary = (output_dir / "run_summary.md").read_text(encoding="utf-8")
     assert "- dataset_name: market1501" in run_summary
     assert "- model_name: resnet50" in run_summary
+    assert "- model_backbone_name: null" in run_summary
     assert "- model_pretrained: False" in run_summary
     assert "- model_pretrained_path: null" in run_summary
+    assert "- optimizer_name: adam" in run_summary
     assert "- random_erasing: False" in run_summary
     assert "- random_erasing_prob: 0.500000" in run_summary
     assert "- sampler_name: shuffle" in run_summary
@@ -244,6 +282,12 @@ def test_validate_training_config_accepts_osnet_model_name() -> None:
     validate_training_config(config)
 
 
+def test_validate_training_config_accepts_vit_model_name() -> None:
+    config = make_vit_triplet_pk_config()
+
+    validate_training_config(config)
+
+
 def test_validate_training_config_rejects_invalid_model_name() -> None:
     config = make_smoke_config()
     config["model"]["name"] = "mobilenet"
@@ -265,6 +309,52 @@ def test_validate_training_config_rejects_non_string_pretrained_path() -> None:
     config["model"]["pretrained_path"] = 123
 
     with pytest.raises(ValueError, match="model.pretrained_path"):
+        validate_training_config(config)
+
+
+@pytest.mark.parametrize(
+    ("key", "value", "message"),
+    [
+        ("backbone_name", 123, "model.backbone_name"),
+        ("patch_size", 0, "model.patch_size"),
+        ("num_parts", 0, "model.num_parts"),
+    ],
+)
+def test_validate_training_config_rejects_invalid_vit_model_controls(
+    key: str,
+    value: object,
+    message: str,
+) -> None:
+    config = make_vit_triplet_pk_config()
+    config["model"][key] = value
+
+    with pytest.raises(ValueError, match=message):
+        validate_training_config(config)
+
+
+def test_validate_training_config_rejects_missing_vit_backbone_name() -> None:
+    config = make_vit_triplet_pk_config()
+    config["model"].pop("backbone_name")
+
+    with pytest.raises(ValueError, match="model.backbone_name"):
+        validate_training_config(config)
+
+
+@pytest.mark.parametrize(
+    ("value", "message"),
+    [
+        ("sgd", "optimizer.name"),
+        (123, "optimizer.name"),
+    ],
+)
+def test_validate_training_config_rejects_invalid_optimizer_name(
+    value: object,
+    message: str,
+) -> None:
+    config = make_smoke_config()
+    config["optimizer"]["name"] = value
+
+    with pytest.raises(ValueError, match=message):
         validate_training_config(config)
 
 
@@ -395,6 +485,51 @@ def test_run_training_accepts_osnet_triplet_pk_sampler(tmp_path: Path) -> None:
     run_summary = (output_dir / "run_summary.md").read_text(encoding="utf-8")
     assert "- model_name: osnet_x1_0" in run_summary
     assert "- model_pretrained_path: null" in run_summary
+    assert "- sampler_name: pk" in run_summary
+    assert "- triplet_enabled: True" in run_summary
+
+
+def test_run_training_accepts_vit_adamw_triplet_pk_sampler(tmp_path: Path) -> None:
+    if not DATA_ROOT.is_dir():
+        pytest.skip(f"Market-1501 dataset not found at {DATA_ROOT}")
+
+    output_dir = tmp_path / "vit_triplet_pk"
+
+    metrics = run_training(
+        config=make_vit_triplet_pk_config(),
+        output_dir=output_dir,
+        device="cpu",
+    )
+
+    assert metrics["model_name"] == "vit_patch16_global_local"
+    assert metrics["model_backbone_name"] == "deit_tiny_patch16_224"
+    assert metrics["model_pretrained"] is False
+    assert metrics["optimizer_name"] == "adamw"
+    assert metrics["num_batches"] == 1
+    assert metrics["num_samples"] == 4
+    assert metrics["sampler_name"] == "pk"
+    assert metrics["triplet_enabled"] is True
+    assert metrics["avg_train_loss"] == pytest.approx(
+        metrics["avg_ce_loss"] + metrics["avg_triplet_loss"]
+    )
+
+    checkpoint = torch.load(output_dir / "ckpt" / "latest.pth", map_location="cpu")
+    assert checkpoint["config"]["model"]["name"] == "vit_patch16_global_local"
+    assert checkpoint["config"]["optimizer"]["name"] == "adamw"
+    assert "backbone.patch_embed.proj.weight" in checkpoint["model"]
+    assert "projection.0.weight" in checkpoint["model"]
+
+    train_log = (output_dir / "logs" / "train.txt").read_text(encoding="utf-8")
+    assert "model_name=vit_patch16_global_local" in train_log
+    assert "model_backbone_name=deit_tiny_patch16_224" in train_log
+    assert "optimizer_name=adamw" in train_log
+    assert "sampler_name=pk" in train_log
+    assert "triplet_loss=" in train_log
+
+    run_summary = (output_dir / "run_summary.md").read_text(encoding="utf-8")
+    assert "- model_name: vit_patch16_global_local" in run_summary
+    assert "- model_backbone_name: deit_tiny_patch16_224" in run_summary
+    assert "- optimizer_name: adamw" in run_summary
     assert "- sampler_name: pk" in run_summary
     assert "- triplet_enabled: True" in run_summary
 
@@ -877,6 +1012,40 @@ def test_msmt17_osnet_40_epoch_config_matches_long_run_recipe() -> None:
     assert config["loss"]["triplet"]["weight"] == pytest.approx(1.0)
     assert config["loss"]["triplet"]["normalize_features"] is True
     assert config["train"]["epochs"] == 40
+    assert config["eval"]["enabled"] is True
+    assert config["eval"]["query_chunk_size"] == 256
+
+
+def test_msmt17_deit_global_local_config_matches_vt_final_recipe() -> None:
+    config = load_config("configs/deit_small_patch16_global_local_msmt17.yaml")
+
+    assert config["run"]["name"] == "deit_small_patch16_global_local_msmt17"
+    assert config["data"]["name"] == "msmt17_v1"
+    assert config["data"]["root"] == "data/MSMT17_V1"
+    assert config["data"]["image_size"] == [256, 128]
+    assert config["data"]["batch_size"] == 64
+    assert config["data"]["random_erasing"] is False
+    assert config["model"]["name"] == "vit_patch16_global_local"
+    assert config["model"]["backbone_name"] == "deit_small_patch16_224"
+    assert config["model"]["num_classes"] == 1041
+    assert config["model"]["feature_dim"] == 512
+    assert config["model"]["pretrained"] is True
+    assert config["model"]["patch_size"] == 16
+    assert config["model"]["num_parts"] == 4
+    assert config["sampler"]["name"] == "pk"
+    assert config["sampler"]["num_pids"] == 16
+    assert config["sampler"]["num_instances"] == 4
+    assert config["loss"]["triplet"]["enabled"] is True
+    assert config["loss"]["triplet"]["margin"] == pytest.approx(0.3)
+    assert config["loss"]["triplet"]["weight"] == pytest.approx(1.0)
+    assert config["loss"]["triplet"]["normalize_features"] is True
+    assert config["optimizer"]["name"] == "adamw"
+    assert config["optimizer"]["lr"] == pytest.approx(0.0001)
+    assert config["optimizer"]["weight_decay"] == pytest.approx(0.05)
+    assert config["scheduler"]["name"] == "cosine"
+    assert config["scheduler"]["warmup_epochs"] == 5
+    assert config["train"]["epochs"] == 40
+    assert config["train"]["amp"] is True
     assert config["eval"]["enabled"] is True
     assert config["eval"]["query_chunk_size"] == 256
 
