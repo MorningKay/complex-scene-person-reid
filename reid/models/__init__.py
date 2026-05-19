@@ -19,6 +19,7 @@ from reid.models.resnet_reid import (
     resnet50_reid,
 )
 from reid.models.registry import build_reid_model, normalize_model_name
+from reid.models.vit_reid import ViTPatch16GlobalLocalReID, vit_patch16_global_local_reid
 
 __all__ = [
     "ChannelGate",
@@ -29,6 +30,7 @@ __all__ = [
     "OSBlock",
     "OSNetReID",
     "ResNetReID",
+    "ViTPatch16GlobalLocalReID",
     "build_reid_model",
     "load_imagenet_osnet_weights",
     "load_imagenet_resnet50_weights",
@@ -37,4 +39,5 @@ __all__ = [
     "normalize_model_name",
     "osnet_x1_0_reid",
     "resnet50_reid",
+    "vit_patch16_global_local_reid",
 ]

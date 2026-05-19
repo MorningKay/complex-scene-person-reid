@@ -164,10 +164,17 @@ def _validate_model_config(config: Config) -> None:
         "resnet_50": "resnet50",
         "osnet": "osnet_x1_0",
         "osnet_x1_0": "osnet_x1_0",
+        "vit": "vit_patch16_global_local",
+        "deit": "vit_patch16_global_local",
+        "vit_patch16_global_local": "vit_patch16_global_local",
     }
     normalized_model_name = aliases.get(normalized_model_name, normalized_model_name)
-    if normalized_model_name not in {"resnet50", "osnet_x1_0"}:
-        raise ValueError("model.name must be one of: resnet50, osnet_x1_0")
+    if normalized_model_name not in {
+        "resnet50",
+        "osnet_x1_0",
+        "vit_patch16_global_local",
+    }:
+        raise ValueError("model.name must be one of: resnet50, osnet_x1_0, vit_patch16_global_local")
 
     last_stride = model_config.get("last_stride")
     if last_stride is not None:
@@ -177,6 +184,15 @@ def _validate_model_config(config: Config) -> None:
     pretrained_path = model_config.get("pretrained_path")
     if pretrained_path is not None and not isinstance(pretrained_path, str):
         raise ValueError("model.pretrained_path must be a string when provided")
+
+    if normalized_model_name == "vit_patch16_global_local":
+        backbone_name = model_config.get("backbone_name")
+        if not isinstance(backbone_name, str) or backbone_name == "":
+            raise ValueError("model.backbone_name must be a non-empty string")
+        patch_size = model_config.get("patch_size", 16)
+        num_parts = model_config.get("num_parts", 4)
+        _ensure_positive_int(patch_size, "model.patch_size")
+        _ensure_positive_int(num_parts, "model.num_parts")
 
 
 def _validate_sampler_config(config: Config) -> None:
