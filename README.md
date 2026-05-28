@@ -97,9 +97,7 @@ cache by `timm`.
 │   ├── train.py                     # Python training CLI
 │   ├── train_resnet_ce.sh           # Shell wrapper for timestamped runs
 │   └── evaluate.py                  # Python evaluation CLI
-├── tests/                           # Pytest coverage for data/model/train/eval
-├── latex_template/                  # Final report source
-└── outputs/                         # Local run outputs, ignored by Git
+└── tests/                           # Pytest coverage for data/model/train/eval
 ```
 
 ## Quick Start
@@ -212,15 +210,3 @@ outputs/<timestamp>_<run_name>/
 
 Evaluation outputs are written to the selected `--output-dir`, usually as
 `eval_metrics.json` and log files.
-
-## Report
-
-The final report source is under `latex_template/`. If the LaTeX environment is ready,
-build it with:
-
-```bash
-cd latex_template
-latexmk -xelatex -shell-escape -halt-on-error -file-line-error -interaction=nonstopmode main.tex
-```
-
-The expected report PDF is `latex_template/main.pdf`.

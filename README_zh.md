@@ -93,9 +93,7 @@ data/
 │   ├── train.py                     # Python 训练 CLI
 │   ├── train_resnet_ce.sh           # 创建时间戳输出目录的训练脚本
 │   └── evaluate.py                  # Python 评估 CLI
-├── tests/                           # 数据、模型、训练和评估的 pytest 测试
-├── latex_template/                  # 最终实验报告源码
-└── outputs/                         # 本地训练输出目录，不纳入 Git
+└── tests/                           # 数据、模型、训练和评估的 pytest 测试
 ```
 
 ## 快速开始
@@ -206,14 +204,3 @@ outputs/<timestamp>_<run_name>/
 ```
 
 评估结果会写入指定的 `--output-dir`，通常包括 `eval_metrics.json` 和对应日志。
-
-## 实验报告
-
-实验报告源码位于 `latex_template/`。如果本地 LaTeX 环境已经配置好，可以使用以下命令编译：
-
-```bash
-cd latex_template
-latexmk -xelatex -shell-escape -halt-on-error -file-line-error -interaction=nonstopmode main.tex
-```
-
-预期生成的报告文件为 `latex_template/main.pdf`。
